@@ -35,11 +35,6 @@ pytest -q
 ```
 The tests cover core gradients, additional autodifferentiation operations, and checkpoint save/load behavior.
 
-## Train the XOR example
-
-```bash
-python examples/train_xor.py
-```
 ## Train
 
 ```powershell
