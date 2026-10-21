@@ -1,4 +1,4 @@
-# MiniGrad: Build a Deep Learning Framework From Scratch
+# MiniGrad: Build a Deep Learning Framework
 
 MiniGrad is an educational, NumPy-backed neural-network framework. It implements a small dynamic computation graph, reverse-mode automatic differentiation, neural-network layers, SGD/Adam optimizers, binary cross-entropy with logits, and model-parameter checkpoints.
 
@@ -33,12 +33,50 @@ python -m pip install -e ".[dev]"
 ```bash
 pytest -q
 ```
+The tests cover core gradients, additional autodifferentiation operations, and checkpoint save/load behavior.
 
 ## Train the XOR example
 
 ```bash
 python examples/train_xor.py
 ```
+## Train
+
+```powershell
+python .\examples\train_xor.py
+```
+
+Training uses separate training, validation, and test datasets. It tracks validation loss, saves the best checkpoint, uses early stopping, and reports test metrics. The default checkpoint is `artifacts/xor_model.npz`.
+
+Training options can be changed from the command line:
+
+```powershell
+python .\examples\train_xor.py --epochs 1500 --lr 0.02 --patience 150 --seed 12
+python .\examples\train_xor.py --checkpoint artifacts\custom_xor.npz
+```
+
+## Predict one input pair
+
+Run these commands after training:
+
+```powershell
+python .\examples\predict_xor.py 0.8 0.4
+python .\examples\predict_xor.py -0.8 0.4
+python .\examples\predict_xor.py 0.8 -0.4 --checkpoint artifacts\custom_xor.npz
+```
+
+The prediction command prints the estimated probability of class 1 and the predicted class. Same-sign input values are class 1; opposite-sign values are class 0.
+
+## Evaluate a saved model
+
+```powershell
+python .\examples\evaluate_xor.py
+python .\examples\evaluate_xor.py --samples 5000 --seed 42
+python .\examples\evaluate_xor.py --threshold 0.6
+python .\examples\evaluate_xor.py --checkpoint artifacts\custom_xor.npz
+```
+
+The evaluation command generates a new synthetic dataset and reports loss, accuracy, precision, recall, specificity, F1 score, and a confusion matrix. This is a synthetic XOR task, not evidence of performance on real-world data.
 
 The script trains a small multilayer perceptron on a synthetic XOR-style classification task and writes model parameters to `artifacts/xor_model.npz`.
 
