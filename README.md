@@ -1,4 +1,4 @@
-# MiniGrad: Build a Deep Learning Framework
+# MiniGrad: Deep Learning Framework
 
 MiniGrad is an educational, NumPy-backed neural-network framework. It implements a small dynamic computation graph, reverse-mode automatic differentiation, neural-network layers, SGD/Adam optimizers, binary cross-entropy with logits, and model-parameter checkpoints.
 
