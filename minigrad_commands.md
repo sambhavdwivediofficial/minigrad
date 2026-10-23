@@ -14,6 +14,12 @@ python --version
 python -m pip install -e ".[dev]"
 ```
 
+### Install With Optional Plotting Support
+
+```powershell
+python -m pip install -e ".[dev,viz]"
+```
+
 ### Run Tests
 
 ```powershell
@@ -109,3 +115,61 @@ python .\examples\evaluate_xor.py --checkpoint artifacts\custom_xor.npz
 ```
 
 These commands let you compare different training configurations and model checkpoints.
+
+## 6. Regression Example
+
+### Train the Regression Model
+
+```powershell
+python .\examples\regression_demo.py
+```
+
+### Train and Save a Loss-Curve Plot
+
+```powershell
+python .\examples\regression_demo.py --plot artifacts\regression_loss.png
+```
+
+### Change Loss Sensitivity (Huber Delta)
+
+```powershell
+python .\examples\regression_demo.py --delta 0.5
+```
+
+## 7. Two-Moons and Spiral Classification
+
+### Run Both Tasks With Plots
+
+```powershell
+python .\examples\moons_spiral_classification.py --plot
+```
+
+### Run Only the Two-Moons Task
+
+```powershell
+python .\examples\moons_spiral_classification.py --task moons --plot
+```
+
+### Run Only the Spiral Task With 4 Classes
+
+```powershell
+python .\examples\moons_spiral_classification.py --task spiral --spiral-classes 4 --plot
+```
+
+**Note:** `--plot` requires `pip install -e ".[viz]"` (matplotlib) and writes PNGs under `artifacts/`.
+
+## 8. Tabular CSV Example
+
+### Generate a Synthetic Housing CSV and Train On It
+
+```powershell
+python .\examples\tabular_csv_demo.py
+```
+
+### Use a Larger Synthetic Dataset
+
+```powershell
+python .\examples\tabular_csv_demo.py --size 5000
+```
+
+This example demonstrates the real-tabular-data path: `CSVDataset` loads the file, the script standardizes features/target, and a `Linear + BatchNorm1d + ReLU` network trains with `AdamW`.

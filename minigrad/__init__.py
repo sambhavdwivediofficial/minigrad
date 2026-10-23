@@ -1,15 +1,29 @@
-"""minigrad: a small educational neural-network framework."""
-from .tensor import Tensor
+from .tensor import Tensor, where, concatenate, stack
 from .nn import (
-    Module, Linear, ReLU, Tanh, Sigmoid, Sequential,
-    mse_loss, binary_cross_entropy_with_logits,
+    Module, Linear, ReLU, Tanh, Sigmoid, Sequential, Flatten,
+    Dropout, LayerNorm, BatchNorm1d,
+    mse_loss, mae_loss, huber_loss, binary_cross_entropy_with_logits,
+    softmax_cross_entropy, kl_divergence,
 )
-from .optim import SGD, Adam
+from .optim import (
+    SGD, Adam, RMSProp, AdamW, clip_grad_norm_,
+    StepLR, CosineAnnealingLR, LinearWarmupLR,
+)
 from .checkpoint import save_checkpoint, load_checkpoint
-from .testing import GradcheckResult, gradcheck
+from .testing import GradcheckResult, gradcheck, gradcheck_multi
+from .data import Dataset, TensorDataset, CSVDataset, DataLoader
+from .engine import Trainer, History, EarlyStopping, binary_accuracy, multiclass_accuracy, r_squared
 
 __all__ = [
-    "Tensor", "Module", "Linear", "ReLU", "Tanh", "Sigmoid", "Sequential",
-    "mse_loss", "binary_cross_entropy_with_logits", "SGD", "Adam",
-    "save_checkpoint", "load_checkpoint", "GradcheckResult", "gradcheck",
+    "Tensor", "where", "concatenate", "stack",
+    "Module", "Linear", "ReLU", "Tanh", "Sigmoid", "Sequential", "Flatten",
+    "Dropout", "LayerNorm", "BatchNorm1d",
+    "mse_loss", "mae_loss", "huber_loss", "binary_cross_entropy_with_logits",
+    "softmax_cross_entropy", "kl_divergence",
+    "SGD", "Adam", "RMSProp", "AdamW", "clip_grad_norm_",
+    "StepLR", "CosineAnnealingLR", "LinearWarmupLR",
+    "save_checkpoint", "load_checkpoint",
+    "GradcheckResult", "gradcheck", "gradcheck_multi",
+    "Dataset", "TensorDataset", "CSVDataset", "DataLoader",
+    "Trainer", "History", "EarlyStopping", "binary_accuracy", "multiclass_accuracy", "r_squared",
 ]
