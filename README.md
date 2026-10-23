@@ -4,6 +4,15 @@ MiniGrad is an educational, NumPy-backed neural-network framework. It implements
 
 **Scope:** this is a CPU-only learning project, not a replacement for PyTorch, TensorFlow, or JAX. Tensors use `float64`; matrix multiplication currently supports 2-D arrays only; many production features are intentionally omitted.
 
+## Documentation
+
+| Document | What's in it |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | How the autograd engine, `Module` system, and `Trainer` actually work internally |
+| [`docs/api.md`](docs/api.md) | Full reference for every public class and function in the package |
+| [`docs/examples.md`](docs/examples.md) | Every script in `examples/`, the command to run it, and its actual output (including the result images) |
+| [`LIMITATIONS.md`](LIMITATIONS.md) | What this project intentionally does not do, and why |
+
 ## What this project teaches
 
 - How a tensor stores values and gradients.
@@ -74,6 +83,34 @@ python .\examples\evaluate_xor.py --checkpoint artifacts\custom_xor.npz
 The evaluation command generates a new synthetic dataset and reports loss, accuracy, precision, recall, specificity, F1 score, and a confusion matrix. This is a synthetic XOR task, not evidence of performance on real-world data.
 
 The script trains a small multilayer perceptron on a synthetic XOR-style classification task and writes model parameters to `artifacts/xor_model.npz`.
+
+## Regression, classification, and tabular examples
+
+```powershell
+python -m pip install -e ".[dev,viz]"
+
+python .\examples\regression_demo.py
+python .\examples\regression_demo.py --plot artifacts\regression_loss.png
+
+python .\examples\moons_spiral_classification.py --plot
+python .\examples\moons_spiral_classification.py --task moons --plot
+python .\examples\moons_spiral_classification.py --task spiral --spiral-classes 4 --plot
+
+python .\examples\tabular_csv_demo.py
+```
+
+`regression_demo.py` fits a noisy nonlinear curve with Huber loss and reports R^2. `moons_spiral_classification.py` builds synthetic two-moons (binary) and spiral (multiclass) datasets, trains with the reusable `Trainer`, and with `--plot` saves a decision-boundary PNG under `artifacts/`. `tabular_csv_demo.py` synthesizes a small housing-price CSV, loads it with `CSVDataset`, standardizes it, and trains a `Linear + BatchNorm1d + ReLU` regressor with `AdamW`.
+
+All three share the same reusable pieces now used across the project: `minigrad.data.{TensorDataset, CSVDataset, DataLoader}` for batching and `minigrad.engine.{Trainer, EarlyStopping}` for the train/validate/early-stop loop, instead of each script hand-rolling its own.
+
+## What's new since v0.1.0
+
+- **Tensor engine:** `reshape`, `transpose`/`.T`, axis-aware `sum`/`mean`, `max`/`argmax`, `exp`, `log`, `abs`, NumPy-style indexing (`__getitem__`), `log_softmax`/`softmax`, plus graph-level `where`/`concatenate`/`stack`.
+- **Modules:** parameter/buffer separation, recursive `.train()`/`.eval()`, `Dropout`, `LayerNorm`, `BatchNorm1d`, `Flatten`.
+- **Losses:** `mae_loss`, `huber_loss`, `softmax_cross_entropy`, `kl_divergence`.
+- **Optimizers:** `RMSProp`, `AdamW` (decoupled weight decay), `clip_grad_norm_`, `StepLR`, `CosineAnnealingLR`, `LinearWarmupLR`.
+- **Data/training:** `Dataset`/`TensorDataset`/`CSVDataset`/`DataLoader`, and a reusable `Trainer` + `EarlyStopping` (see `minigrad/engine.py`) that every example now shares.
+- **Testing:** `gradcheck_multi` for multi-tensor ops, and a much larger test suite — shared-graph gradients, broadcasting sweeps, and a gradient check for every new op. See `LIMITATIONS.md` for what is intentionally still out of scope.
 
 ## Architecture
 
