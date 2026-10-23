@@ -1,14 +1,10 @@
-"""A tiny NumPy-backed Tensor with reverse-mode automatic differentiation.
-
-Educational implementation: CPU only, float64, 2-D matrix multiplication,
-and intentionally limited API. Not a replacement for PyTorch/JAX.
-"""
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence, Union
 import numpy as np
 
 Array = np.ndarray
+AxisArg = Union[int, Sequence[int], None]
 
 
 def _as_array(value) -> Array:
@@ -18,7 +14,6 @@ def _as_array(value) -> Array:
 
 
 def _unbroadcast(grad: Array, target_shape: tuple[int, ...]) -> Array:
-    """Undo NumPy broadcasting when propagating a gradient to an input."""
     grad = np.asarray(grad, dtype=np.float64)
     while grad.ndim > len(target_shape):
         grad = grad.sum(axis=0)
@@ -28,8 +23,24 @@ def _unbroadcast(grad: Array, target_shape: tuple[int, ...]) -> Array:
     return grad.reshape(target_shape)
 
 
+def _normalize_axis(axis: AxisArg, ndim: int) -> Optional[tuple[int, ...]]:
+    if axis is None:
+        return None
+    if isinstance(axis, int):
+        axis = (axis,)
+    return tuple(sorted(a % ndim for a in axis))
+
+
+def _expand_reduced_grad(grad: Array, axis: Optional[tuple[int, ...]], ndim: int) -> Array:
+    if axis is None:
+        return grad.reshape((1,) * ndim)
+    shape = list(grad.shape)
+    for a in axis:
+        shape.insert(a, 1)
+    return grad.reshape(shape)
+
+
 class Tensor:
-    """An ndarray plus a small dynamic computation graph and gradient buffer."""
 
     __array_priority__ = 1000
 
@@ -57,6 +68,10 @@ class Tensor:
     def ndim(self):
         return self.data.ndim
 
+    @property
+    def T(self) -> "Tensor":
+        return self.transpose()
+
     def item(self) -> float:
         return float(self.data.item())
 
@@ -71,12 +86,6 @@ class Tensor:
             self.grad = np.zeros_like(self.data)
 
     def backward(self, gradient=None) -> None:
-        """Backpropagate gradients from this tensor through its computation graph.
-
-        For scalar outputs, the initial gradient defaults to 1. For non-scalar
-        outputs, an explicit gradient with the same shape is required.
-        Gradients accumulate until ``zero_grad`` is called on parameters.
-        """
         if gradient is None:
             if self.data.size != 1:
                 raise ValueError("gradient must be supplied for non-scalar outputs")
@@ -198,20 +207,97 @@ class Tensor:
         out._backward = _backward
         return out
 
-    def sum(self) -> "Tensor":
-        out = Tensor(np.array(self.data.sum()), self.requires_grad, (self,), "sum")
+    def sum(self, axis: AxisArg = None, keepdims: bool = False) -> "Tensor":
+        norm_axis = _normalize_axis(axis, self.data.ndim)
+        value = self.data.sum(axis=axis, keepdims=keepdims)
+        out = Tensor(value, self.requires_grad, (self,), "sum")
 
         def _backward():
             if self.requires_grad:
-                self.grad += np.ones_like(self.data) * out.grad
+                grad = out.grad
+                if not keepdims:
+                    grad = _expand_reduced_grad(grad, norm_axis, self.data.ndim)
+                self.grad += np.ones_like(self.data) * grad
 
         out._backward = _backward
         return out
 
-    def mean(self) -> "Tensor":
+    def mean(self, axis: AxisArg = None, keepdims: bool = False) -> "Tensor":
         if self.data.size == 0:
             raise ValueError("mean() is undefined for an empty tensor")
-        return self.sum() / self.data.size
+        total = self.sum(axis=axis, keepdims=keepdims)
+        if axis is None:
+            count = self.data.size
+        else:
+            norm_axis = _normalize_axis(axis, self.data.ndim)
+            count = 1
+            for a in norm_axis:
+                count *= self.data.shape[a]
+        return total / count
+
+    def max(self, axis: AxisArg = None, keepdims: bool = False) -> "Tensor":
+        value = self.data.max(axis=axis, keepdims=True)
+        mask = (self.data == value).astype(np.float64)
+        mask_sum = mask.sum(axis=axis, keepdims=True)
+        out_value = value if keepdims else (
+            value.reshape(()) if axis is None else np.squeeze(value, axis=axis)
+        )
+        out = Tensor(out_value, self.requires_grad, (self,), "max")
+
+        def _backward():
+            if self.requires_grad:
+                grad = out.grad.reshape(value.shape)
+                self.grad += (mask / mask_sum) * grad
+
+        out._backward = _backward
+        return out
+
+    def argmax(self, axis: AxisArg = None):
+        return self.data.argmax(axis=axis)
+
+    def reshape(self, *shape) -> "Tensor":
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        value = self.data.reshape(shape)
+        out = Tensor(value, self.requires_grad, (self,), "reshape")
+
+        def _backward():
+            if self.requires_grad:
+                self.grad += out.grad.reshape(self.data.shape)
+
+        out._backward = _backward
+        return out
+
+    def transpose(self, *axes) -> "Tensor":
+        if len(axes) == 0:
+            axes_arg = None
+        elif len(axes) == 1 and isinstance(axes[0], (tuple, list)):
+            axes_arg = tuple(axes[0])
+        else:
+            axes_arg = tuple(axes)
+        value = np.transpose(self.data, axes_arg)
+        out = Tensor(value, self.requires_grad, (self,), "transpose")
+
+        def _backward():
+            if self.requires_grad:
+                inv_axes = None if axes_arg is None else tuple(np.argsort(axes_arg))
+                self.grad += np.transpose(out.grad, inv_axes)
+
+        out._backward = _backward
+        return out
+
+    def __getitem__(self, index) -> "Tensor":
+        value = self.data[index]
+        out = Tensor(value, self.requires_grad, (self,), "getitem")
+
+        def _backward():
+            if self.requires_grad:
+                grad_full = np.zeros_like(self.data)
+                np.add.at(grad_full, index, out.grad)
+                self.grad += grad_full
+
+        out._backward = _backward
+        return out
 
     def relu(self) -> "Tensor":
         out = Tensor(np.maximum(self.data, 0.0), self.requires_grad, (self,), "relu")
@@ -235,7 +321,6 @@ class Tensor:
         return out
 
     def sigmoid(self) -> "Tensor":
-        # Numerically stable sigmoid implementation.
         value = np.empty_like(self.data)
         positive = self.data >= 0
         value[positive] = 1.0 / (1.0 + np.exp(-self.data[positive]))
@@ -251,7 +336,6 @@ class Tensor:
         return out
 
     def softplus(self) -> "Tensor":
-        """Stable log(1 + exp(x)), useful for binary cross-entropy with logits."""
         value = np.logaddexp(0.0, self.data)
         out = Tensor(value, self.requires_grad, (self,), "softplus")
 
@@ -267,5 +351,99 @@ class Tensor:
         out._backward = _backward
         return out
 
+    def exp(self) -> "Tensor":
+        value = np.exp(self.data)
+        out = Tensor(value, self.requires_grad, (self,), "exp")
+
+        def _backward():
+            if self.requires_grad:
+                self.grad += value * out.grad
+
+        out._backward = _backward
+        return out
+
+    def log(self) -> "Tensor":
+        out = Tensor(np.log(self.data), self.requires_grad, (self,), "log")
+
+        def _backward():
+            if self.requires_grad:
+                self.grad += out.grad / self.data
+
+        out._backward = _backward
+        return out
+
+    def abs(self) -> "Tensor":
+        out = Tensor(np.abs(self.data), self.requires_grad, (self,), "abs")
+
+        def _backward():
+            if self.requires_grad:
+                self.grad += np.sign(self.data) * out.grad
+
+        out._backward = _backward
+        return out
+
+    def log_softmax(self, axis: int = -1) -> "Tensor":
+        shifted = self - self.max(axis=axis, keepdims=True)
+        log_sum_exp = shifted.exp().sum(axis=axis, keepdims=True).log()
+        return shifted - log_sum_exp
+
+    def softmax(self, axis: int = -1) -> "Tensor":
+        return self.log_softmax(axis=axis).exp()
+
     def __repr__(self) -> str:
         return f"Tensor(data={self.data!r}, requires_grad={self.requires_grad})"
+
+
+def where(condition: Array, a: Tensor, b: Tensor) -> Tensor:
+    mask = np.asarray(condition, dtype=np.float64)
+    a_t = a if isinstance(a, Tensor) else Tensor(a)
+    b_t = b if isinstance(b, Tensor) else Tensor(b)
+    value = mask * a_t.data + (1.0 - mask) * b_t.data
+    requires_grad = a_t.requires_grad or b_t.requires_grad
+    out = Tensor(value, requires_grad, (a_t, b_t), "where")
+
+    def _backward():
+        if a_t.requires_grad:
+            a_t.grad += _unbroadcast(mask * out.grad, a_t.data.shape)
+        if b_t.requires_grad:
+            b_t.grad += _unbroadcast((1.0 - mask) * out.grad, b_t.data.shape)
+
+    out._backward = _backward
+    return out
+
+
+def concatenate(tensors: Sequence[Tensor], axis: int = 0) -> Tensor:
+    tensors = list(tensors)
+    if not tensors:
+        raise ValueError("concatenate requires at least one tensor")
+    arrays = [t.data for t in tensors]
+    value = np.concatenate(arrays, axis=axis)
+    requires_grad = any(t.requires_grad for t in tensors)
+    out = Tensor(value, requires_grad, tuple(tensors), "concat")
+    sizes = [a.shape[axis] for a in arrays]
+    ndim = value.ndim
+
+    def _backward():
+        start = 0
+        for t, size in zip(tensors, sizes):
+            if t.requires_grad:
+                sl = [slice(None)] * ndim
+                sl[axis] = slice(start, start + size)
+                t.grad += out.grad[tuple(sl)]
+            start += size
+
+    out._backward = _backward
+    return out
+
+
+def stack(tensors: Sequence[Tensor], axis: int = 0) -> Tensor:
+    tensors = list(tensors)
+    if not tensors:
+        raise ValueError("stack requires at least one tensor")
+    expanded = []
+    for t in tensors:
+        shape = list(t.data.shape)
+        insert_at = axis if axis >= 0 else axis + len(shape) + 1
+        shape.insert(insert_at, 1)
+        expanded.append(t.reshape(*shape))
+    return concatenate(expanded, axis=axis)
