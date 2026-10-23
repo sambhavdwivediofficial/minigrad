@@ -1,4 +1,3 @@
-"""Simple model checkpoint persistence using NumPy NPZ files."""
 from pathlib import Path
 import numpy as np
 from .nn import Module
