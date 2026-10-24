@@ -109,6 +109,23 @@ A `Module` tree (e.g. `Sequential(Linear(...), BatchNorm1d(...), ...)`) is walke
 
 `EarlyStopping` and "keep the best `state_dict()` seen so far, restore it at the end" are implemented inside `Trainer.fit()` for the same reason `train_xor.py` originally implemented them inline — except now every example gets them for free.
 
-## 7. Where the design intentionally stops
+## 7. CNNs, RNNs and attention: pushing composition as far as it goes
+
+Section 4 made a claim: most "advanced" primitives should be *composed*, not hand-derived. `Conv2d`, `MaxPool2d`, the recurrent cells, and the attention mechanism are the real test of that claim, because they are exactly the layers a reader would expect to need custom backward math.
+
+**`Conv2d` has zero convolution-specific gradient code.** The forward pass works in three composed steps:
+1. *im2col by slicing*: for every output position `(i, j)`, slice out the `[N, C_in, kH, kW]` patch the kernel would see there (plain `Tensor.__getitem__`, already gradient-tested) and flatten it to `[N, C_in*kH*kW]` (`reshape`).
+2. *stack the patches* into `[N, H_out*W_out, C_in*kH*kW]`, then reshape to a single 2-D matrix `[N*H_out*W_out, C_in*kH*kW]` — this sidesteps the "matmul is 2-D only" limitation entirely instead of lifting it.
+3. *one matmul* against the flattened `[C_in*kH*kW, C_out]` kernel, then `reshape`+`transpose` back to `[N, C_out, H_out, W_out]`.
+
+Every one of those steps already had a gradient test before `Conv2d` existed. `tests/test_conv.py::test_conv2d_gradcheck_all_inputs` is really testing whether the *composition* is wired correctly, not whether any new calculus is correct — there isn't any new calculus. `MaxPool2d` / `AvgPool2d` are the same idea with `.max(axis=...)` / `.mean(axis=...)` standing in for the matmul step. `padding` is implemented as `concatenate`-ing zero tensors around the border (`pad2d`) rather than as its own op.
+
+**The recurrent cells (`RNNCell`, `LSTMCell`, `GRUCell`) are even more direct**: every gate is `(x @ W_x + h @ W_h + b)` through a `sigmoid`/`tanh`, and every cell/hidden-state update is `+`/`*` between the results. `RNN`/`LSTM`/`GRU` then just call the cell once per timestep in a Python `for` loop and `stack` the outputs — this *is* backpropagation-through-time, made visible rather than hidden behind a fused kernel: unrolling the loop literally builds one node per timestep in the same computation graph section 1–2 already described, so `.backward()` differentiates through time for free.
+
+**Multi-head self-attention** composes `matmul`, `.transpose()`, `.softmax(axis=-1)`, `where` (for the causal mask), `concatenate` (to join heads back together), and `reshape` (to fold batch and sequence together for the only 2-D-matmul-shaped parts). Because true batched matmul isn't implemented (see [`LIMITATIONS.md`](../LIMITATIONS.md)), `MultiHeadSelfAttention.forward` loops over `(batch, head)` pairs in Python and calls `scaled_dot_product_attention` — which itself is four lines of composed Tensor arithmetic — once per pair. `TransformerEncoderBlock` wraps that in the standard residual-plus-`LayerNorm` sandwich around attention and a position-wise `FeedForward`, and `TransformerLM` stacks several blocks behind an `Embedding` lookup and a fixed (non-trainable) `sinusoidal_positional_encoding` buffer, with `causal=True` so position `t` can never attend to position `> t` — `tests/test_attention.py::test_causal_mask_blocks_future_positions` checks this directly, by perturbing a future token and confirming earlier outputs are unchanged, not just that gradients check out.
+
+The practical payoff of building things this way: `tests/test_recurrent.py::test_lstm_can_memorize_a_short_repeating_sequence` and `tests/test_attention.py::test_transformer_lm_can_memorize_a_short_repeating_sequence` don't just gradient-check individual pieces — they train `LSTM` and `TransformerLM` on a toy next-character task end to end and assert the loss actually drops near zero. That only works if every composed piece, all the way down to `Tensor.__add__`, is correct — which is exactly the point of insisting on composition over hand-derived shortcuts.
+
+## 8. Where the design intentionally stops
 
 See [`LIMITATIONS.md`](../LIMITATIONS.md) for the full list. The short version: this architecture is optimized for **traceability** (you can read `_backward` and see exactly what it does) over performance (no operator fusion, no kernel compilation, no GPU) or production robustness (no distributed training, no mixed precision, no multi-process data loading). That trade-off is the entire point of an educational framework — see the main [`README.md`](../README.md) for the project's scope.

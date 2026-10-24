@@ -92,6 +92,18 @@ Normalizes each feature over the **batch** dimension at train time (and updates 
 ### `class Sequential(*layers)`
 `forward(x)` applies every layer in order. `.layers` is a plain Python list (so `model.layers[i]` works).
 
+### `pad2d(x: Tensor, padding: int) -> Tensor`
+Zero-pads a `[N, C, H, W]` tensor by `padding` on every side of `H` and `W`. *Composed* (via `concatenate` with zero tensors — see [`docs/architecture.md`](architecture.md#7-cnns-rnns-and-attention-pushing-composition-as-far-as-it-goes)).
+
+### `class Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, seed=None)`
+2-D convolution over `[N, C_in, H, W] -> [N, C_out, H_out, W_out]`. *Composed entirely* from slicing, `reshape`, `stack`, a single 2-D `matmul`, and `transpose` — no convolution-specific backward code exists. See [`docs/architecture.md`](architecture.md#7-cnns-rnns-and-attention-pushing-composition-as-far-as-it-goes) for exactly how. Raises `ValueError` on non-positive channel/kernel sizes or invalid stride/padding.
+
+### `class MaxPool2d(kernel_size, stride=None)` / `class AvgPool2d(kernel_size, stride=None)`
+Non-overlapping (or strided) spatial pooling over `[N, C, H, W]`. `stride` defaults to `kernel_size`. *Composed* via slicing + `reshape` + `.max(axis=...)` / `.mean(axis=...)`.
+
+### `class Embedding(num_embeddings, embedding_dim, seed=None)`
+A lookup table: `forward(indices)` returns `weight[indices]` via `Tensor.__getitem__`'s fancy-indexing gradient (repeated indices correctly accumulate gradient — this is literally what makes a gather differentiable). `indices` is a plain integer array (or `Tensor` of indices), any shape; output shape is `indices.shape + (embedding_dim,)`.
+
 ### Loss functions
 | Function | Signature | Notes |
 |---|---|---|
@@ -126,6 +138,46 @@ In-place gradient clipping by global L2 norm across all given parameters. Return
 
 ### Schedulers — `StepLR(optimizer, step_size, gamma=0.1)`, `CosineAnnealingLR(optimizer, t_max, eta_min=0.0)`, `LinearWarmupLR(optimizer, warmup_steps)`
 All three mutate `optimizer.lr` in place on each `.step()` call (call once per epoch or per batch, matching how you schedule). `.get_last_lr()` reads the current value back.
+
+---
+
+## `minigrad.recurrent`
+
+All cells and sequence wrappers below are *composed* — every gate is `matmul` + `+` + `sigmoid`/`tanh`; there is no hand-derived recurrent backward code. See [`docs/architecture.md`](architecture.md#7-cnns-rnns-and-attention-pushing-composition-as-far-as-it-goes).
+
+### `class RNNCell(input_size, hidden_size, seed=None)`
+One Elman-RNN timestep. `forward(x, h) -> h_new`, where `x: [batch, input_size]`, `h: [batch, hidden_size]`.
+
+### `class LSTMCell(input_size, hidden_size, seed=None)`
+One LSTM timestep (input/forget/cell/output gates). `forward(x, (h, c)) -> (h_new, c_new)`. The forget-gate bias `b_f` is initialized to `1.0` (not `0.0`) — the standard trick that keeps gradients from vanishing at the start of training by defaulting the cell toward "remember".
+
+### `class GRUCell(input_size, hidden_size, seed=None)`
+One GRU timestep (update/reset/candidate gates). `forward(x, h) -> h_new`.
+
+### `class RNN(input_size, hidden_size, seed=None)` / `class LSTM(...)` / `class GRU(...)`
+Sequence wrappers: `forward(x, initial_state=None)` takes `x: [batch, seq_len, input_size]`, loops the matching cell over every timestep (this loop *is* backpropagation-through-time — see [`docs/architecture.md`](architecture.md#7-cnns-rnns-and-attention-pushing-composition-as-far-as-it-goes)), and returns `(outputs, final_state)` where `outputs: [batch, seq_len, hidden_size]`. `LSTM`'s `final_state` is `(h, c)`; `RNN`/`GRU`'s is just `h`. Default `initial_state` is zeros.
+
+---
+
+## `minigrad.attention`
+
+### `scaled_dot_product_attention(q, k, v, mask=None) -> Tensor`
+The core attention operation on **2-D** `q, k, v: [seq_len, d_k]` (looped over batch/heads by the caller — see below). `mask`, if given, is a plain boolean `[seq_len, seq_len]` NumPy array (`True` = attend, `False` = block); implemented via `where` with `-1e9` in blocked positions before the `.softmax(axis=-1)`.
+
+### `class MultiHeadSelfAttention(d_model, num_heads, seed=None)`
+`forward(x, causal=False) -> Tensor`, `x: [batch, seq_len, d_model]`. Projects to Q/K/V, splits into `num_heads` heads of size `d_model // num_heads` (raises `ValueError` if that doesn't divide evenly), loops over `(batch, head)` calling `scaled_dot_product_attention` on each 2-D slice, `concatenate`s heads back together, and applies the output projection. `causal=True` builds a lower-triangular mask so position `t` cannot attend to any position `> t`.
+
+### `class FeedForward(d_model, d_ff, seed=None)`
+The position-wise feed-forward sublayer: `Linear(d_model, d_ff) -> ReLU -> Linear(d_ff, d_model)`, applied to every position independently (reshapes `[batch, seq, d_model]` to 2-D and back around the two `Linear` calls, since `Linear` itself is 2-D-only).
+
+### `class TransformerEncoderBlock(d_model, num_heads, d_ff, seed=None)`
+One pre-activation-style Transformer block: `x = LayerNorm(x + MultiHeadSelfAttention(x))`, then `x = LayerNorm(x + FeedForward(x))`. `forward(x, causal=False)`.
+
+### `class TransformerLM(vocab_size, d_model, num_heads, d_ff, num_layers, max_seq_len, seed=None)`
+A minimal GPT-style causal language model: `Embedding` lookup `+` a fixed `sinusoidal_positional_encoding` buffer, through `num_layers` stacked `TransformerEncoderBlock`s (always `causal=True`), to a final `Linear` projection to vocabulary logits. `forward(token_ids) -> logits`, `token_ids: [batch, seq_len]` (integers), `logits: [batch, seq_len, vocab_size]`.
+
+### `sinusoidal_positional_encoding(seq_len, d_model) -> Tensor`
+The fixed (non-trainable) sin/cos position encoding from "Attention Is All You Need", shape `[seq_len, d_model]`.
 
 ---
 
