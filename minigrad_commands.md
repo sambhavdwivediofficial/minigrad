@@ -173,3 +173,47 @@ python .\examples\tabular_csv_demo.py --size 5000
 ```
 
 This example demonstrates the real-tabular-data path: `CSVDataset` loads the file, the script standardizes features/target, and a `Linear + BatchNorm1d + ReLU` network trains with `AdamW`.
+
+## 9. CNN Shape Classification
+
+### Train on the Default 16x16 Synthetic Shapes
+
+```powershell
+python .\examples\cnn_shapes_classification.py
+```
+
+### Use Larger Images and More Epochs
+
+```powershell
+python .\examples\cnn_shapes_classification.py --image-size 24 --epochs 40
+```
+
+### Use a Noisier Dataset
+
+```powershell
+python .\examples\cnn_shapes_classification.py --noise 0.15
+```
+
+This example trains a small `Conv2d -> ReLU -> MaxPool2d` stack to classify procedurally drawn squares, circles, and crosses — the first real image-classification example in the project.
+
+## 10. Character-Level LSTM Language Model
+
+### Train and Generate Text
+
+```powershell
+python .\examples\char_lstm_demo.py
+```
+
+### Train a Bigger Model for Longer
+
+```powershell
+python .\examples\char_lstm_demo.py --hidden-size 128 --epochs 500
+```
+
+### Generate a Longer Sample
+
+```powershell
+python .\examples\char_lstm_demo.py --generate-length 300
+```
+
+This example trains an `Embedding -> LSTM -> Linear` character-level language model with gradient clipping, then generates text autoregressively — one character sampled at a time, fed back in as the next input.

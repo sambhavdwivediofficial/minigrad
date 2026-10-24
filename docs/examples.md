@@ -101,13 +101,39 @@ Typical result: **R² ≈ 0.98** (on the standardized target) on held-out valida
 
 ---
 
-## Shared machinery across all four examples
+## 5. `cnn_shapes_classification.py`
+
+Demonstrates: **`Conv2d` + `MaxPool2d`** on a genuine image-classification task — the use case convolutions exist for. This is also the most direct real-world analogue: the same `Conv2d -> ReLU -> MaxPool2d` pattern used here is the literal building block behind image classifiers, medical-imaging models, and the vision backbone of most object-detection systems.
+
+```powershell
+python .\examples\cnn_shapes_classification.py
+python .\examples\cnn_shapes_classification.py --image-size 24 --epochs 40
+```
+
+The script procedurally draws small grayscale images containing a square, circle, or cross (plus Gaussian pixel noise, so it isn't a trivial memorization task) and trains `Conv2d(1,8) -> ReLU -> MaxPool2d -> Conv2d(8,16) -> ReLU -> MaxPool2d -> Flatten -> Linear -> ReLU -> Linear` with `softmax_cross_entropy`. Typical result: **100% validation accuracy** — the point isn't that shape classification is hard, it's that `Conv2d`'s backward pass (entirely composed from `getitem`/`reshape`/`matmul`, see [`docs/architecture.md`](architecture.md#7-cnns-rnns-and-attention-pushing-composition-as-far-as-it-goes)) correctly drives a multi-layer convolutional network to convergence.
+
+---
+
+## 6. `char_lstm_demo.py`
+
+Demonstrates: **`Embedding` + `LSTM` (backpropagation-through-time) + gradient clipping + autoregressive generation** — a small, literal version of the "char-rnn" language models that were the state of the art for text generation before Transformers, and still the clearest way to see what a language model actually is: a next-token classifier, applied to its own output in a loop.
+
+```powershell
+python .\examples\char_lstm_demo.py
+python .\examples\char_lstm_demo.py --hidden-size 128 --epochs 500
+```
+
+`CharLSTM` (defined right in the script, to show how small a custom `Module` can be: `Embedding -> LSTM -> Linear`) is trained on a short built-in text corpus with `softmax_cross_entropy` over next-character prediction, using `clip_grad_norm_` to keep the backpropagation-through-time gradients from exploding — a real, common failure mode this project's own `LIMITATIONS.md` entry on RNNs explains. After training, `generate()` samples one character at a time from the model's own output distribution (temperature-scaled softmax) and feeds each sampled character back in as the next input — real autoregressive generation, not a lookup table. Typical result: >95% next-character accuracy on the training text, and generated text that reproduces its phrasing almost verbatim (expected, given the small, repetitive corpus — the point is that the *mechanism* is real, not that the corpus is large).
+
+---
+
+## Shared machinery across all six examples
 
 | Piece | Where it lives | Used by |
 |---|---|---|
 | `TensorDataset` / `CSVDataset` / `DataLoader` | `minigrad.data` | regression, moons/spiral, tabular |
 | `Trainer` / `EarlyStopping` | `minigrad.engine` | regression, moons/spiral, tabular |
-| `save_checkpoint` / `load_checkpoint` | `minigrad.checkpoint` | all four |
+| `save_checkpoint` / `load_checkpoint` | `minigrad.checkpoint` | all six |
 | `plot_loss_curve` / `plot_decision_boundary` | `minigrad.visualization` | regression (loss curve), moons/spiral (boundary) |
 
-Only `xor_model.py`'s original scripts still hand-roll their own loop — intentionally left as-is so you can diff it against `minigrad/engine.py` and see exactly what got generalized into the reusable `Trainer`.
+`xor_model.py`'s original scripts and `char_lstm_demo.py` hand-roll their own loop instead of using `Trainer` — the XOR scripts intentionally, so you can diff it against `minigrad/engine.py` and see exactly what got generalized; `char_lstm_demo.py` because its loss needs a reshape (`[batch, seq, vocab] -> [batch*seq, vocab]`) and gradient clipping between `backward()` and `step()`, which doesn't fit `Trainer`'s current single-loss-call shape — see `LIMITATIONS.md` for what `Trainer` does not yet support.

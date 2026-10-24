@@ -112,6 +112,14 @@ All three share the same reusable pieces now used across the project: `minigrad.
 - **Data/training:** `Dataset`/`TensorDataset`/`CSVDataset`/`DataLoader`, and a reusable `Trainer` + `EarlyStopping` (see `minigrad/engine.py`) that every example now shares.
 - **Testing:** `gradcheck_multi` for multi-tensor ops, and a much larger test suite — shared-graph gradients, broadcasting sweeps, and a gradient check for every new op. See `LIMITATIONS.md` for what is intentionally still out of scope.
 
+## CNNs, RNNs, and attention
+
+- **Convolutional:** `Conv2d`, `MaxPool2d`, `AvgPool2d`, `pad2d` — every one of them composed from already-tested `Tensor` ops (slicing, `reshape`, `stack`, 2-D `matmul`), with no convolution-specific backward code. See `docs/architecture.md`.
+- **Recurrent:** `RNNCell`/`LSTMCell`/`GRUCell` plus `RNN`/`LSTM`/`GRU` sequence wrappers — real backpropagation-through-time, via a plain Python loop over timesteps.
+- **Attention:** `scaled_dot_product_attention`, `MultiHeadSelfAttention`, `FeedForward`, `TransformerEncoderBlock`, and a minimal causal `TransformerLM`, plus `sinusoidal_positional_encoding`.
+- **New examples:** `examples/cnn_shapes_classification.py` (image classification) and `examples/char_lstm_demo.py` (a trainable, text-generating character-level language model). See `docs/examples.md`.
+- **New module:** `Embedding`, for anywhere you need a trainable lookup table (used by both the recurrent and attention layers).
+
 ## Architecture
 
 ```text
