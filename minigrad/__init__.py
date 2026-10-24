@@ -2,8 +2,14 @@ from .tensor import Tensor, where, concatenate, stack
 from .nn import (
     Module, Linear, ReLU, Tanh, Sigmoid, Sequential, Flatten,
     Dropout, LayerNorm, BatchNorm1d,
+    Conv2d, MaxPool2d, AvgPool2d, Embedding, pad2d,
     mse_loss, mae_loss, huber_loss, binary_cross_entropy_with_logits,
     softmax_cross_entropy, kl_divergence,
+)
+from .recurrent import RNNCell, LSTMCell, GRUCell, RNN, LSTM, GRU
+from .attention import (
+    scaled_dot_product_attention, MultiHeadSelfAttention, FeedForward,
+    TransformerEncoderBlock, TransformerLM, sinusoidal_positional_encoding,
 )
 from .optim import (
     SGD, Adam, RMSProp, AdamW, clip_grad_norm_,
@@ -18,8 +24,12 @@ __all__ = [
     "Tensor", "where", "concatenate", "stack",
     "Module", "Linear", "ReLU", "Tanh", "Sigmoid", "Sequential", "Flatten",
     "Dropout", "LayerNorm", "BatchNorm1d",
+    "Conv2d", "MaxPool2d", "AvgPool2d", "Embedding", "pad2d",
     "mse_loss", "mae_loss", "huber_loss", "binary_cross_entropy_with_logits",
     "softmax_cross_entropy", "kl_divergence",
+    "RNNCell", "LSTMCell", "GRUCell", "RNN", "LSTM", "GRU",
+    "scaled_dot_product_attention", "MultiHeadSelfAttention", "FeedForward",
+    "TransformerEncoderBlock", "TransformerLM", "sinusoidal_positional_encoding",
     "SGD", "Adam", "RMSProp", "AdamW", "clip_grad_norm_",
     "StepLR", "CosineAnnealingLR", "LinearWarmupLR",
     "save_checkpoint", "load_checkpoint",
