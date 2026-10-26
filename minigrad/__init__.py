@@ -15,7 +15,8 @@ from .optim import (
     SGD, Adam, RMSProp, AdamW, clip_grad_norm_,
     StepLR, CosineAnnealingLR, LinearWarmupLR,
 )
-from .checkpoint import save_checkpoint, load_checkpoint
+from .checkpoint import save_checkpoint, load_checkpoint, save_training_state, load_training_state
+from .autograd import grad, hvp, hessian, newton_step
 from .testing import GradcheckResult, gradcheck, gradcheck_multi
 from .data import Dataset, TensorDataset, CSVDataset, DataLoader
 from .engine import Trainer, History, EarlyStopping, binary_accuracy, multiclass_accuracy, r_squared
@@ -32,7 +33,8 @@ __all__ = [
     "TransformerEncoderBlock", "TransformerLM", "sinusoidal_positional_encoding",
     "SGD", "Adam", "RMSProp", "AdamW", "clip_grad_norm_",
     "StepLR", "CosineAnnealingLR", "LinearWarmupLR",
-    "save_checkpoint", "load_checkpoint",
+    "save_checkpoint", "load_checkpoint", "save_training_state", "load_training_state",
+    "grad", "hvp", "hessian", "newton_step",
     "GradcheckResult", "gradcheck", "gradcheck_multi",
     "Dataset", "TensorDataset", "CSVDataset", "DataLoader",
     "Trainer", "History", "EarlyStopping", "binary_accuracy", "multiclass_accuracy", "r_squared",

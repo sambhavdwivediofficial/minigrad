@@ -88,6 +88,10 @@ def main():
     print(f"tabular_csv_demo: final val R^2 (standardized target)={history.val_metrics[-1]['r2']:.4f}")
     print(f"Saved model parameters to {args.checkpoint}")
 
+    stats_path = args.checkpoint.with_name(args.checkpoint.stem + "_norm_stats.npz")
+    np.savez_compressed(stats_path, x_mean=x_mean, x_std=x_std, y_mean=np.array(y_mean), y_std=np.array(y_std))
+    print(f"Saved feature/target normalization stats to {stats_path}")
+
 
 if __name__ == "__main__":
     main()

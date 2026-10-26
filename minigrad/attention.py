@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-from .tensor import Tensor, where, concatenate, stack
+from .tensor import Tensor, where
 from .nn import Module, Linear, LayerNorm, Embedding, ReLU
 
 
@@ -19,7 +19,7 @@ def sinusoidal_positional_encoding(seq_len: int, d_model: int) -> Tensor:
 
 def scaled_dot_product_attention(q: Tensor, k: Tensor, v: Tensor, mask=None) -> Tensor:
     d_k = q.shape[-1]
-    scores = (q @ k.transpose(1, 0)) / (d_k ** 0.5)
+    scores = (q @ k.swapaxes(-1, -2)) / (d_k ** 0.5)
     if mask is not None:
         scores = where(mask, scores, Tensor(-1e9))
     weights = scores.softmax(axis=-1)
@@ -41,29 +41,23 @@ class MultiHeadSelfAttention(Module):
         self.w_v = Tensor(rng.normal(0.0, scale, (d_model, d_model)), requires_grad=True)
         self.w_o = Tensor(rng.normal(0.0, scale, (d_model, d_model)), requires_grad=True)
 
+    def _split_heads(self, x: Tensor, batch: int, seq_len: int) -> Tensor:
+        return x.reshape(batch, seq_len, self.num_heads, self.d_k).transpose(0, 2, 1, 3)
+
+    def _merge_heads(self, x: Tensor, batch: int, seq_len: int) -> Tensor:
+        return x.transpose(0, 2, 1, 3).reshape(batch, seq_len, self.d_model)
+
     def forward(self, x: Tensor, causal: bool = False) -> Tensor:
         batch, seq_len, d_model = x.shape
-        x_flat = x.reshape(batch * seq_len, d_model)
-        q = (x_flat @ self.w_q).reshape(batch, seq_len, d_model)
-        k = (x_flat @ self.w_k).reshape(batch, seq_len, d_model)
-        v = (x_flat @ self.w_v).reshape(batch, seq_len, d_model)
+        q = self._split_heads(x @ self.w_q, batch, seq_len)
+        k = self._split_heads(x @ self.w_k, batch, seq_len)
+        v = self._split_heads(x @ self.w_v, batch, seq_len)
 
         mask = np.tril(np.ones((seq_len, seq_len), dtype=bool)) if causal else None
+        attn_out = scaled_dot_product_attention(q, k, v, mask)
 
-        per_batch = []
-        for b in range(batch):
-            heads = []
-            for h in range(self.num_heads):
-                lo, hi = h * self.d_k, (h + 1) * self.d_k
-                q_bh = q[b, :, lo:hi]
-                k_bh = k[b, :, lo:hi]
-                v_bh = v[b, :, lo:hi]
-                heads.append(scaled_dot_product_attention(q_bh, k_bh, v_bh, mask))
-            per_batch.append(concatenate(heads, axis=1))
-        attn_out = stack(per_batch, axis=0)
-
-        attn_flat = attn_out.reshape(batch * seq_len, d_model)
-        return (attn_flat @ self.w_o).reshape(batch, seq_len, d_model)
+        merged = self._merge_heads(attn_out, batch, seq_len)
+        return merged @ self.w_o
 
 
 class FeedForward(Module):
@@ -75,12 +69,7 @@ class FeedForward(Module):
         self.linear2 = Linear(d_ff, d_model, seed=seed2)
 
     def forward(self, x: Tensor) -> Tensor:
-        batch, seq_len, d_model = x.shape
-        flat = x.reshape(batch * seq_len, d_model)
-        flat = self.linear1(flat)
-        flat = self.activation(flat)
-        flat = self.linear2(flat)
-        return flat.reshape(batch, seq_len, d_model)
+        return self.linear2(self.activation(self.linear1(x)))
 
 
 class TransformerEncoderBlock(Module):
@@ -123,11 +112,11 @@ class TransformerLM(Module):
     def forward(self, token_ids) -> Tensor:
         token_ids = np.asarray(token_ids.data if isinstance(token_ids, Tensor) else token_ids, dtype=np.int64)
         batch, seq_len = token_ids.shape
+        if seq_len > self.max_seq_len:
+            raise ValueError(f"sequence length {seq_len} exceeds max_seq_len={self.max_seq_len}")
         x = self.token_embedding(token_ids)
         pos = Tensor(self.buffer("positional_encoding")[:seq_len])
         x = x + pos
         for block in self.blocks:
             x = block(x, causal=True)
-        flat = x.reshape(batch * seq_len, self.d_model)
-        logits = self.output_projection(flat)
-        return logits.reshape(batch, seq_len, logits.shape[-1])
+        return self.output_projection(x)
