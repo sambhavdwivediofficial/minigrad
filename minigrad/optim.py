@@ -17,6 +17,23 @@ class Optimizer:
     def step(self):
         raise NotImplementedError
 
+    def state_dict(self) -> dict:
+        raise NotImplementedError
+
+    def load_state_dict(self, state: dict) -> None:
+        raise NotImplementedError
+
+    def _pack_buffers(self, state: dict, name: str, buffers) -> None:
+        for i, buf in enumerate(buffers):
+            state[f"{name}.{i}"] = buf.copy()
+
+    def _unpack_buffers(self, state: dict, name: str, buffers) -> None:
+        for i in range(len(buffers)):
+            key = f"{name}.{i}"
+            if key not in state:
+                raise ValueError(f"checkpoint is missing optimizer buffer {key!r}")
+            buffers[i] = np.asarray(state[key], dtype=np.float64).copy()
+
 
 class SGD(Optimizer):
     def __init__(self, parameters, lr: float = 1e-2, momentum: float = 0.0):
@@ -34,6 +51,16 @@ class SGD(Optimizer):
             velocity *= self.momentum
             velocity += p.grad
             p.data -= self.lr * velocity
+
+    def state_dict(self) -> dict:
+        state = {"lr": np.array(self.lr), "momentum": np.array(self.momentum)}
+        self._pack_buffers(state, "velocity", self.velocity)
+        return state
+
+    def load_state_dict(self, state: dict) -> None:
+        self.lr = float(state["lr"])
+        self.momentum = float(state["momentum"])
+        self._unpack_buffers(state, "velocity", self.velocity)
 
 
 class Adam(Optimizer):
@@ -62,6 +89,24 @@ class Adam(Optimizer):
             v_hat = v / (1.0 - self.beta2 ** self.t)
             p.data -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
 
+    def state_dict(self) -> dict:
+        state = {
+            "lr": np.array(self.lr), "beta1": np.array(self.beta1), "beta2": np.array(self.beta2),
+            "eps": np.array(self.eps), "t": np.array(self.t),
+        }
+        self._pack_buffers(state, "m", self.m)
+        self._pack_buffers(state, "v", self.v)
+        return state
+
+    def load_state_dict(self, state: dict) -> None:
+        self.lr = float(state["lr"])
+        self.beta1 = float(state["beta1"])
+        self.beta2 = float(state["beta2"])
+        self.eps = float(state["eps"])
+        self.t = int(state["t"])
+        self._unpack_buffers(state, "m", self.m)
+        self._unpack_buffers(state, "v", self.v)
+
 
 class RMSProp(Optimizer):
 
@@ -89,6 +134,23 @@ class RMSProp(Optimizer):
                 p.data -= self.lr * buf
             else:
                 p.data -= self.lr * update
+
+    def state_dict(self) -> dict:
+        state = {
+            "lr": np.array(self.lr), "alpha": np.array(self.alpha),
+            "eps": np.array(self.eps), "momentum": np.array(self.momentum),
+        }
+        self._pack_buffers(state, "square_avg", self.square_avg)
+        self._pack_buffers(state, "momentum_buffer", self.momentum_buffer)
+        return state
+
+    def load_state_dict(self, state: dict) -> None:
+        self.lr = float(state["lr"])
+        self.alpha = float(state["alpha"])
+        self.eps = float(state["eps"])
+        self.momentum = float(state["momentum"])
+        self._unpack_buffers(state, "square_avg", self.square_avg)
+        self._unpack_buffers(state, "momentum_buffer", self.momentum_buffer)
 
 
 class AdamW(Optimizer):
@@ -120,6 +182,25 @@ class AdamW(Optimizer):
             m_hat = m / (1.0 - self.beta1 ** self.t)
             v_hat = v / (1.0 - self.beta2 ** self.t)
             p.data -= self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
+
+    def state_dict(self) -> dict:
+        state = {
+            "lr": np.array(self.lr), "beta1": np.array(self.beta1), "beta2": np.array(self.beta2),
+            "eps": np.array(self.eps), "weight_decay": np.array(self.weight_decay), "t": np.array(self.t),
+        }
+        self._pack_buffers(state, "m", self.m)
+        self._pack_buffers(state, "v", self.v)
+        return state
+
+    def load_state_dict(self, state: dict) -> None:
+        self.lr = float(state["lr"])
+        self.beta1 = float(state["beta1"])
+        self.beta2 = float(state["beta2"])
+        self.eps = float(state["eps"])
+        self.weight_decay = float(state["weight_decay"])
+        self.t = int(state["t"])
+        self._unpack_buffers(state, "m", self.m)
+        self._unpack_buffers(state, "v", self.v)
 
 
 def clip_grad_norm_(parameters: Iterable[Tensor], max_norm: float) -> float:

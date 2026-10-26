@@ -325,11 +325,11 @@ class Conv2d(Module):
             for j in range(w_out):
                 patch = x[:, :, i * s : i * s + k, j * s : j * s + k]
                 patches.append(patch.reshape(N, C * k * k))
-        col = stack(patches, axis=1).reshape(N * h_out * w_out, C * k * k)
+        col = stack(patches, axis=1)
 
         weight_flat = self.weight.reshape(self.out_channels, C * k * k).transpose(1, 0)
         out_flat = col @ weight_flat
-        out = out_flat.reshape(N, h_out, w_out, self.out_channels).transpose(0, 3, 1, 2)
+        out = out_flat.transpose(0, 2, 1).reshape(N, self.out_channels, h_out, w_out)
         return out + self.bias
 
 
