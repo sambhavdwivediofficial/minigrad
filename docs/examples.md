@@ -26,6 +26,8 @@ python .\examples\predict_xor.py 0.8 0.4
 ```
 Loads the checkpoint, runs one forward pass, prints the class-1 probability and predicted class. Same-sign inputs → class 1; opposite-sign → class 0.
 
+Every other training example below (`regression_demo.py`, `moons_spiral_classification.py`, `tabular_csv_demo.py`, `cnn_shapes_classification.py`) now has its own matching predict script the same way `train_xor.py` has `predict_xor.py` — see "Predict scripts" at the end of this document.
+
 **Evaluate on a fresh synthetic set:**
 ```powershell
 python .\examples\evaluate_xor.py
@@ -127,13 +129,56 @@ python .\examples\char_lstm_demo.py --hidden-size 128 --epochs 500
 
 ---
 
-## Shared machinery across all six examples
+## 7. `char_transformer_demo.py`
+
+Demonstrates: **`TransformerLM` (now built on true batched matmul, no Python loop over heads) + autoregressive generation with a fixed context window.**
+
+```powershell
+python .\examples\char_transformer_demo.py
+python .\examples\char_transformer_demo.py --num-layers 3 --d-model 64 --epochs 500
+```
+
+Same idea as `char_lstm_demo.py` — next-character prediction on a short built-in corpus, `clip_grad_norm_`, temperature-scaled autoregressive sampling — but through `TransformerLM` instead of a hand-assembled `Embedding -> LSTM -> Linear` stack, and trained in mini-batches via `DataLoader` rather than one single whole-corpus forward pass per epoch (see `LIMITATIONS.md` for why: a naive full-batch version is numerically identical but drives resident memory into the gigabytes on a longer run). Because `TransformerLM` has a `max_seq_len`, `generate()` truncates its growing context to the last `seq_len` tokens before each forward pass — a real, if simple, stand-in for the sliding-context-window behaviour production LLM serving code needs (minus the key/value caching that would make it fast; see `LIMITATIONS.md`). Typical result: >94% next-character accuracy and generated text that closely reproduces the training corpus's phrasing, same as the LSTM version — the point of having both examples side by side is that they solve the identical task through architecturally different mechanisms (recurrence vs. attention), built on the same underlying `Tensor` engine.
+
+---
+
+## 8. `resume_training_demo.py`
+
+Demonstrates: **`save_training_state` / `load_training_state`** — resuming training with the optimizer's internal state (Adam's moment estimates, step count) intact, not just the model weights.
+
+```powershell
+python .\examples\resume_training_demo.py
+python .\examples\resume_training_demo.py --first-segment-epochs 300 --second-segment-epochs 300
+```
+
+The script trains the same XOR-style model three ways: (1) for a first segment of epochs, then saves the full training state and prints what was saved; (2) builds a **completely fresh** model and optimizer, loads that saved state back into them, and continues for a second segment; (3) trains the same total number of epochs uninterrupted, as a control. It then prints the final loss from the resumed run next to the uninterrupted control run — on a `save_checkpoint`-only setup, these would differ slightly, because Adam's moment estimates would have restarted from zero; with `save_training_state`, they match to within floating-point precision. This is the concrete, runnable version of the claim in `docs/architecture.md`'s Section 9 and `LIMITATIONS.md`'s optimizer section: resume is not merely "load the weights back", it is actually continuing the same optimization trajectory.
+
+---
+
+## Predict scripts
+
+Every training example other than `train_xor.py` now has a matching predict script, mirroring `predict_xor.py`'s pattern (rebuild the same architecture, `load_checkpoint`, run one forward pass, print the result):
+
+| Script | Loads | Usage |
+|---|---|---|
+| `predict_regression.py` | `artifacts/regression_model.npz` | `python .\examples\predict_regression.py 1.5` |
+| `predict_moons.py` | `artifacts/moons_model.npz` | `python .\examples\predict_moons.py 1.0 0.5` |
+| `predict_spiral.py` | `artifacts/spiral_model.npz` | `python .\examples\predict_spiral.py 0.3 0.2` |
+| `predict_tabular.py` | `artifacts/tabular_model.npz` + `artifacts/tabular_model_norm_stats.npz` | `python .\examples\predict_tabular.py 3 1800 15 5.0` |
+| `predict_cnn_shapes.py` | `artifacts/cnn_shapes_model.npz` | `python .\examples\predict_cnn_shapes.py --true-class circle` |
+
+`predict_tabular.py` is the one with an extra moving part: `tabular_csv_demo.py` standardizes its features and target before training (zero mean, unit variance, computed from the training split only), so a raw input like "3 bedrooms, 1800 sqft" has to go through the *same* standardization before the model sees it, and the model's standardized-space output has to be converted back to a real price afterward. Rather than recomputing those statistics (which would require regenerating the exact same synthetic CSV, a fragile assumption), `tabular_csv_demo.py` now also saves them to a small companion `_norm_stats.npz` file next to the model checkpoint, and `predict_tabular.py` loads both. `predict_cnn_shapes.py` has no external image file to load — it draws a random (or `--true-class`-forced) shape the same way `cnn_shapes_classification.py` generates its training data, predicts it, and reports whether the prediction matches what was actually drawn.
+
+---
+
+## Shared machinery across all nine training scripts
 
 | Piece | Where it lives | Used by |
 |---|---|---|
-| `TensorDataset` / `CSVDataset` / `DataLoader` | `minigrad.data` | regression, moons/spiral, tabular |
+| `TensorDataset` / `CSVDataset` / `DataLoader` | `minigrad.data` | regression, moons/spiral, tabular, char-LSTM, char-Transformer |
 | `Trainer` / `EarlyStopping` | `minigrad.engine` | regression, moons/spiral, tabular |
-| `save_checkpoint` / `load_checkpoint` | `minigrad.checkpoint` | all six |
+| `save_checkpoint` / `load_checkpoint` | `minigrad.checkpoint` | all nine training scripts; every predict script |
+| `save_training_state` / `load_training_state` | `minigrad.checkpoint` | `resume_training_demo.py` |
 | `plot_loss_curve` / `plot_decision_boundary` | `minigrad.visualization` | regression (loss curve), moons/spiral (boundary) |
 
-`xor_model.py`'s original scripts and `char_lstm_demo.py` hand-roll their own loop instead of using `Trainer` — the XOR scripts intentionally, so you can diff it against `minigrad/engine.py` and see exactly what got generalized; `char_lstm_demo.py` because its loss needs a reshape (`[batch, seq, vocab] -> [batch*seq, vocab]`) and gradient clipping between `backward()` and `step()`, which doesn't fit `Trainer`'s current single-loss-call shape — see `LIMITATIONS.md` for what `Trainer` does not yet support.
+`xor_model.py`'s original scripts hand-roll their own loop instead of using `Trainer`, intentionally, so you can diff it against `minigrad/engine.py` and see exactly what got generalized. `char_lstm_demo.py`, `char_transformer_demo.py`, and `resume_training_demo.py` also hand-roll their loop — their loss needs a reshape (`[batch, seq, vocab] -> [batch*seq, vocab]`) and, for the char models, gradient clipping between `backward()` and `step()`, neither of which fits `Trainer`'s current single-loss-call shape; see `LIMITATIONS.md` for what `Trainer` does not yet support.

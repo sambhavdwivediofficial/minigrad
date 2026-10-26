@@ -217,3 +217,75 @@ python .\examples\char_lstm_demo.py --generate-length 300
 ```
 
 This example trains an `Embedding -> LSTM -> Linear` character-level language model with gradient clipping, then generates text autoregressively — one character sampled at a time, fed back in as the next input.
+
+## 11. Predict Scripts (Every Trained Model)
+
+### Regression
+
+```powershell
+python .\examples\predict_regression.py 1.5
+```
+
+### Two-Moons
+
+```powershell
+python .\examples\predict_moons.py 1.0 0.5
+```
+
+### Spiral
+
+```powershell
+python .\examples\predict_spiral.py 0.3 0.2
+```
+
+### Tabular Housing Price
+
+```powershell
+python .\examples\predict_tabular.py 3 1800 15 5.0
+```
+
+### CNN Shapes (Random Test Shape)
+
+```powershell
+python .\examples\predict_cnn_shapes.py
+```
+
+### CNN Shapes (Force a Specific Shape)
+
+```powershell
+python .\examples\predict_cnn_shapes.py --true-class circle
+```
+
+**Note:** each predict script requires its matching example to have been run at least once first, so the checkpoint it loads exists.
+
+## 12. Transformer Text Generation
+
+### Train and Generate Text
+
+```powershell
+python .\examples\char_transformer_demo.py
+```
+
+### Train a Deeper Model
+
+```powershell
+python .\examples\char_transformer_demo.py --num-layers 3 --d-model 64 --epochs 500
+```
+
+This is the same next-character-prediction task as `char_lstm_demo.py`, trained through `TransformerLM` (attention) instead of `LSTM` (recurrence).
+
+## 13. Resumable Training
+
+### Train, Save, Resume, and Compare Against an Uninterrupted Run
+
+```powershell
+python .\examples\resume_training_demo.py
+```
+
+### Use Longer Segments
+
+```powershell
+python .\examples\resume_training_demo.py --first-segment-epochs 300 --second-segment-epochs 300
+```
+
+This example proves `save_training_state` / `load_training_state` resume training exactly: it trains a model two ways (interrupted-and-resumed vs. uninterrupted) and prints both final losses, which match to within floating-point precision.

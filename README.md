@@ -120,6 +120,25 @@ All three share the same reusable pieces now used across the project: `minigrad.
 - **New examples:** `examples/cnn_shapes_classification.py` (image classification) and `examples/char_lstm_demo.py` (a trainable, text-generating character-level language model). See `docs/examples.md`.
 - **New module:** `Embedding`, for anywhere you need a trainable lookup table (used by both the recurrent and attention layers).
 
+## Batched matmul, second-order autodiff, and resumable training
+
+```powershell
+python .\examples\predict_regression.py 1.5
+python .\examples\predict_moons.py 1.0 0.5
+python .\examples\predict_spiral.py 0.3 0.2
+python .\examples\predict_tabular.py 3 1800 15 5.0
+python .\examples\predict_cnn_shapes.py --true-class circle
+
+python .\examples\char_transformer_demo.py
+python .\examples\resume_training_demo.py
+```
+
+- **True batched matmul:** `@` now supports any number of broadcasting leading batch dimensions (not just plain 2-D), the same way `np.matmul` does. `MultiHeadSelfAttention` no longer loops over `(batch, head)` pairs in Python — it is one batched matmul — and `Linear` now accepts input of any rank (`[batch, features]` or `[batch, seq, features]`) with no code changes, since a 2-D weight matrix broadcasts against a higher-rank input automatically. See `docs/architecture.md`.
+- **Second-order autodiff:** `Tensor.backward(create_graph=True)` makes `.grad` a differentiable `Tensor`, so a second `.backward()` call differentiates through the first. `minigrad.grad`, `minigrad.hvp`, `minigrad.hessian`, and `minigrad.newton_step` wrap this in a small functional API — `newton_step` reaches the exact minimum of a quadratic in one step, which only happens if the computed Hessian is exactly right. Supported through every op except `__getitem__`'s own backward rule (so: `Linear`, `LayerNorm`, `BatchNorm1d`, `Dropout`, the regression/BCE losses, and a single RNN/LSTM/GRU cell call all support it; `Conv2d`, `Embedding`, `softmax_cross_entropy`, and the RNN/LSTM/GRU sequence wrappers do not yet). See `docs/architecture.md` and `LIMITATIONS.md`.
+- **Resumable training:** `SGD`/`Adam`/`RMSProp`/`AdamW` now implement `state_dict()`/`load_state_dict()`, and `save_training_state`/`load_training_state` persist model and optimizer state together, so a resumed run is bit-for-bit identical to an uninterrupted one — see `examples/resume_training_demo.py`.
+- **Predict scripts for every example:** `predict_regression.py`, `predict_moons.py`, `predict_spiral.py`, `predict_tabular.py`, and `predict_cnn_shapes.py` join `predict_xor.py`, each loading its matching checkpoint and running one prediction. See `docs/examples.md`.
+- **Transformer text generation:** `char_transformer_demo.py` is a `TransformerLM`-based counterpart to `char_lstm_demo.py` — same next-character-prediction task, generated through attention instead of recurrence.
+
 ## Architecture
 
 ```text

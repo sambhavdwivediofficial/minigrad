@@ -28,10 +28,10 @@ The core autodiff primitive: a NumPy array plus a gradient buffer and a position
 - `.numpy() -> np.ndarray` — a **copy** of `.data` (safe to mutate without affecting the graph).
 - `.detach() -> Tensor` — a new leaf `Tensor` with `requires_grad=False`, copied data, no graph history. Use this before feeding a result into metrics/plots so you don't accidentally build graph you'll never call `.backward()` on.
 - `.zero_grad()` — resets `.grad` to zeros (no-op if `requires_grad=False`).
-- `.backward(gradient=None)` — runs reverse-mode autodiff from this tensor back through the graph. `gradient=None` is only valid for scalar tensors (defaults to `1.0`); non-scalar tensors require an explicit `gradient` array of matching shape (vector-Jacobian product convention). Raises `RuntimeError` if `requires_grad=False`, raises `ValueError` on a shape mismatch. See [`docs/architecture.md`](architecture.md#2-backward-topological-sort-then-walk-it-in-reverse).
+- `.backward(gradient=None, create_graph=False)` — runs reverse-mode autodiff from this tensor back through the graph. `gradient=None` is only valid for scalar tensors (defaults to `1.0`); non-scalar tensors require an explicit `gradient` array of matching shape (vector-Jacobian product convention). Raises `RuntimeError` if `requires_grad=False`, raises `ValueError` on a shape mismatch. `create_graph=True` makes every touched tensor's `.grad` a differentiable `Tensor` instead of a plain array, so a second `.backward()` call can differentiate through the first one (second-order gradients) — not supported through `__getitem__`'s own backward rule; see [`docs/architecture.md`](architecture.md#9-second-order-autodiff-differentiating-through-backward-itself) and `minigrad.autograd` below.
 
 **Arithmetic operators** *(all hand-derived; all support a plain Python/NumPy scalar or array on the other side, auto-wrapped into a `Tensor`)*
-`+`, `-` (binary and unary), `*`, `/`, `** power` (scalar exponent only — `TypeError` on a non-scalar power), `@` (matmul, **2-D operands only** — `ValueError` otherwise).
+`+`, `-` (binary and unary), `*`, `/`, `** power` (scalar exponent only — `TypeError` on a non-scalar power), `@` (matmul — true batched matmul: both operands need at least 2 dimensions, the last two are the actual matrix multiply, and every dimension before that broadcasts like `np.matmul`; `ValueError` on fewer than 2 dimensions or a mismatched inner dimension). See [`docs/architecture.md`](architecture.md#8-true-batched-matmul).
 
 **Reductions**
 - `.sum(axis=None, keepdims=False) -> Tensor` — *hand-derived.* Axis-aware; `axis=None, keepdims=False` (the default) matches the original no-argument behaviour exactly.
@@ -41,7 +41,8 @@ The core autodiff primitive: a NumPy array plus a gradient buffer and a position
 
 **Shape ops**
 - `.reshape(*shape) -> Tensor` — *hand-derived* (backward is just reshaping `out.grad` back to the original shape).
-- `.transpose(*axes) -> Tensor` — *hand-derived.* No arguments reverses all axes (like `np.transpose`).
+- `.transpose(*axes) -> Tensor` — *hand-derived.* No arguments reverses all axes (like `np.transpose`); given axes must be a full permutation (one index per dimension).
+- `.swapaxes(axis1, axis2) -> Tensor` — *composed* (builds the full permutation with just those two axes swapped and calls `.transpose(*perm)`). Supports negative axis indices. This is what `scaled_dot_product_attention` uses for `k.swapaxes(-1, -2)` regardless of how many batch dimensions `k` has.
 - `__getitem__(index) -> Tensor` — *hand-derived.* Supports NumPy basic and fancy/integer indexing. Backward uses `np.add.at`, so **repeated indices correctly accumulate** gradient (this is what makes an embedding-style gather differentiable).
 
 **Nonlinearities** *(all hand-derived except where noted)*
@@ -133,6 +134,9 @@ Exponential moving average of squared gradients; optional momentum on top of the
 ### `class AdamW(parameters, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01)`
 Adam with **decoupled** weight decay (Loshchilov & Hutter): decay is applied directly to the parameter (`p -= lr * weight_decay * p`), not mixed into the gradient the way "Adam + L2 penalty" does.
 
+### Optimizer state: `.state_dict()` / `.load_state_dict(state)`
+`SGD`, `Adam`, `RMSProp`, and `AdamW` all implement these: every hyperparameter (`lr`, `momentum`, `betas`, `eps`, `weight_decay`) plus every per-parameter buffer (`velocity`, `m`/`v`, `square_avg`/`momentum_buffer`) and step count `t`, as a flat `dict[str, np.ndarray]` — the same shape of dict `Module.state_dict()` returns, so both can be merged into one `.npz` (see `save_training_state` below). Restoring state makes training resume **bit-for-bit identical** to an uninterrupted run; `tests/test_optim.py::test_resumed_training_matches_uninterrupted_training_exactly` checks this directly rather than just checking the numbers "look reasonable".
+
 ### `clip_grad_norm_(parameters, max_norm) -> float`
 In-place gradient clipping by global L2 norm across all given parameters. Returns the **pre-clipping** total norm (useful for logging).
 
@@ -219,8 +223,28 @@ Plain dataclass: `.train_loss`, `.val_loss`, `.train_metrics`, `.val_metrics` �
 
 ## `minigrad.checkpoint`
 
-- `save_checkpoint(model: Module, path) -> None` — `np.savez_compressed` of `model.state_dict()` (parameters **and** buffers).
+- `save_checkpoint(model: Module, path) -> None` — `np.savez_compressed` of `model.state_dict()` (parameters **and** buffers). Model state only.
 - `load_checkpoint(model: Module, path) -> None` — loads and calls `model.load_state_dict(...)`.
+- `save_training_state(model: Module, optimizer: Optimizer, path, **metadata) -> None` — saves model state **and** optimizer state **and** arbitrary extra scalars (e.g. `epoch=30`, `best_val_loss=0.11`) together in one `.npz`, prefixed `model.`/`optimizer.`/`meta.` internally so the three never collide. This is the function to use for resumable training; `save_checkpoint` alone is not enough to resume with identical behaviour, because it has no optimizer moment estimates to restore.
+- `load_training_state(model: Module, optimizer: Optimizer, path) -> dict` — restores both (calling `model.load_state_dict` and `optimizer.load_state_dict`) and returns the `metadata` dict (values come back as 0-d NumPy arrays; use `int(...)` / `float(...)` to unwrap a scalar). See `examples/resume_training_demo.py` for a full before/after comparison against uninterrupted training.
+
+---
+
+## `minigrad.autograd`
+
+Second-order autodiff, built on `Tensor.backward(create_graph=True)` (see [`docs/architecture.md`](architecture.md#9-second-order-autodiff-differentiating-through-backward-itself) for how that works internally). Every function below only works through forward passes that avoid `Tensor.__getitem__` internally — see `LIMITATIONS.md` for exactly which layers that excludes.
+
+### `grad(output: Tensor, inputs: Tensor | Sequence[Tensor], create_graph=False)`
+Convenience wrapper: zeroes `.grad` on every tensor in `inputs`, calls `output.backward(create_graph=create_graph)`, and returns the resulting `.grad` for each input (a single value if `inputs` was a single `Tensor`, a list otherwise). `output` must be a scalar `Tensor`; every tensor in `inputs` must have `requires_grad=True`. Chaining two calls — the second with `create_graph=False` on a scalar built from the first call's (Tensor-valued) result — is how to get a second derivative without touching `.backward()` directly.
+
+### `hvp(fn: Callable[[Tensor], Tensor], x: Tensor, v) -> np.ndarray`
+Hessian-vector product `H @ v` for a scalar function `fn` of a single 1-D `Tensor` `x`, computed in exactly **two** backward passes (Pearlmutter's trick) — the full Hessian is never materialized, which matters once `x` has more than a handful of elements.
+
+### `hessian(fn: Callable[[Tensor], Tensor], x: Tensor) -> np.ndarray`
+The full Hessian matrix, built by calling `hvp` once per standard basis vector (`O(n)` double-backward passes for an `n`-element `x`).
+
+### `newton_step(fn: Callable[[Tensor], Tensor], x: Tensor, damping=1e-6) -> np.ndarray`
+One step of damped Newton's method: `x - (H + damping·I)⁻¹g`. For a true quadratic `fn`, a single call with `damping=0` lands exactly on the minimum — see `tests/test_second_order.py::test_newton_step_reaches_quadratic_minimum_in_one_step`.
 
 ---
 
