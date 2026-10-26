@@ -102,6 +102,78 @@ def test_cosine_annealing_reaches_eta_min_and_holds():
     assert optimizer.lr == pytest.approx(0.1, abs=1e-9)
 
 
+@pytest.mark.parametrize(
+    "optimizer_cls, kwargs",
+    [
+        (SGD, dict(lr=0.1, momentum=0.9)),
+        (Adam, dict(lr=0.01)),
+        (RMSProp, dict(lr=0.01, momentum=0.5)),
+        (AdamW, dict(lr=0.01, weight_decay=0.1)),
+    ],
+)
+def test_optimizer_state_dict_round_trip(optimizer_cls, kwargs):
+    model = Sequential(Linear(3, 4, seed=1))
+    optimizer = optimizer_cls(model.parameters(), **kwargs)
+    for _ in range(5):
+        optimizer.zero_grad()
+        loss = (model(Tensor(np.random.randn(2, 3))) ** 2).sum()
+        loss.backward()
+        optimizer.step()
+    state = optimizer.state_dict()
+
+    model2 = Sequential(Linear(3, 4, seed=99))
+    optimizer2 = optimizer_cls(model2.parameters(), **kwargs)
+    optimizer2.load_state_dict(state)
+    for key, value in state.items():
+        np.testing.assert_allclose(optimizer2.state_dict()[key], value)
+    assert optimizer2.lr == optimizer.lr
+
+
+def test_resumed_training_matches_uninterrupted_training_exactly(tmp_path):
+    from minigrad import save_training_state, load_training_state
+
+    rng = np.random.default_rng(0)
+    x = rng.uniform(-1, 1, size=(100, 2))
+    y = ((x[:, 0] * x[:, 1]) > 0).astype(np.float64).reshape(-1, 1)
+
+    def build():
+        model = Sequential(Linear(2, 8, seed=1), Tanh(), Linear(8, 1, seed=2))
+        return model, Adam(model.parameters(), lr=0.05)
+
+    model_a, opt_a = build()
+    losses_a = []
+    for _ in range(20):
+        opt_a.zero_grad()
+        loss = mse_loss(model_a(Tensor(x)), Tensor(y))
+        loss.backward()
+        opt_a.step()
+        losses_a.append(loss.item())
+
+    model_b, opt_b = build()
+    losses_b = []
+    for _ in range(10):
+        opt_b.zero_grad()
+        loss = mse_loss(model_b(Tensor(x)), Tensor(y))
+        loss.backward()
+        opt_b.step()
+        losses_b.append(loss.item())
+
+    path = tmp_path / "resume.npz"
+    save_training_state(model_b, opt_b, path, epoch=10)
+
+    model_c, opt_c = build()
+    metadata = load_training_state(model_c, opt_c, path)
+    assert int(metadata["epoch"]) == 10
+    for _ in range(10):
+        opt_c.zero_grad()
+        loss = mse_loss(model_c(Tensor(x)), Tensor(y))
+        loss.backward()
+        opt_c.step()
+        losses_b.append(loss.item())
+
+    np.testing.assert_allclose(losses_a, losses_b, atol=1e-8)
+
+
 def test_linear_warmup_ramps_then_holds():
     model = Sequential(Linear(2, 2, seed=1))
     optimizer = SGD(model.parameters(), lr=2.0)

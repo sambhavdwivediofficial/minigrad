@@ -40,7 +40,7 @@ def test_extended_operation_gradients(function, values):
         (lambda t: (t.softmax(axis=1) ** 2).sum(), (4, 5)),
     ],
 )
-def test_tier1_tensor_op_gradients(function, shape):
+def test_shape_and_indexing_op_gradients(function, shape):
     rng = np.random.default_rng(42)
     values = rng.normal(loc=0.0, scale=1.0, size=shape) + np.sign(rng.normal(size=shape)) * 0.5
     value = Tensor(values, requires_grad=True)

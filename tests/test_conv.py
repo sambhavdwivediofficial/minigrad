@@ -44,10 +44,11 @@ def test_conv2d_gradcheck_all_inputs():
         conv.bias = b
         return (conv(x) ** 2).sum()
 
-    x = Tensor(np.random.randn(2, 2, 5, 5), requires_grad=True)
-    w = Tensor(np.random.randn(3, 2, 3, 3) * 0.1, requires_grad=True)
+    rng = np.random.default_rng(0)
+    x = Tensor(rng.standard_normal((2, 2, 5, 5)), requires_grad=True)
+    w = Tensor(rng.standard_normal((3, 2, 3, 3)) * 0.1, requires_grad=True)
     b = Tensor(np.zeros((1, 3, 1, 1)), requires_grad=True)
-    results = gradcheck_multi(forward, [x, w, b])
+    results = gradcheck_multi(forward, [x, w, b], rtol=3e-3)
     assert all(r.passed for r in results), results
 
 

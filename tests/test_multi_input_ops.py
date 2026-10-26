@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from minigrad import Tensor, where, concatenate, stack, gradcheck_multi
+from minigrad import Tensor, where, concatenate, stack, gradcheck, gradcheck_multi
 
 
 def test_matmul_gradcheck_multi():
@@ -9,6 +9,42 @@ def test_matmul_gradcheck_multi():
     b = Tensor(rng.normal(size=(4, 2)), requires_grad=True)
     results = gradcheck_multi(lambda aa, bb: (aa @ bb).sum(), [a, b])
     assert all(r.passed for r in results), results
+
+
+@pytest.mark.parametrize(
+    "shape_a, shape_b, expected_out_shape",
+    [
+        ((4, 3, 5), (4, 5, 2), (4, 3, 2)),
+        ((2, 3, 4, 5), (2, 3, 5, 6), (2, 3, 4, 6)),
+        ((5, 3, 4), (4, 2), (5, 3, 2)),
+        ((1, 3, 4), (6, 4, 2), (6, 3, 2)),
+    ],
+)
+def test_batched_matmul_gradcheck(shape_a, shape_b, expected_out_shape):
+    rng = np.random.default_rng(1)
+    a = Tensor(rng.normal(size=shape_a), requires_grad=True)
+    b = Tensor(rng.normal(size=shape_b), requires_grad=True)
+    out = a @ b
+    assert out.shape == expected_out_shape
+    results = gradcheck_multi(lambda aa, bb: (aa @ bb).sum(), [a, b])
+    assert all(r.passed for r in results), results
+
+
+def test_matmul_rejects_1d_operand():
+    with pytest.raises(ValueError):
+        Tensor(np.random.randn(3)) @ Tensor(np.random.randn(3))
+
+
+def test_matmul_rejects_mismatched_inner_dimension():
+    with pytest.raises(ValueError):
+        Tensor(np.random.randn(3, 4)) @ Tensor(np.random.randn(5, 2))
+
+
+def test_swapaxes_gradcheck_and_shape():
+    x = Tensor(np.random.randn(2, 3, 4, 5), requires_grad=True)
+    out = x.swapaxes(1, 2)
+    assert out.shape == (2, 4, 3, 5)
+    assert gradcheck(lambda t: (t.swapaxes(-1, -2) ** 2).sum(), x).passed
 
 
 @pytest.mark.parametrize("axis", [0, 1])

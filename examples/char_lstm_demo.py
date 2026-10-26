@@ -5,6 +5,7 @@ from minigrad import (
     Tensor, Embedding, LSTM, Linear,
     Adam, clip_grad_norm_, softmax_cross_entropy,
     save_checkpoint, load_checkpoint, Module, Sequential,
+    TensorDataset, DataLoader,
 )
 
 CORPUS = (
@@ -63,6 +64,7 @@ def parse_args():
     parser.add_argument("--seq-len", type=int, default=20)
     parser.add_argument("--embed-dim", type=int, default=16)
     parser.add_argument("--hidden-size", type=int, default=64)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--grad-clip", type=float, default=5.0)
@@ -79,19 +81,25 @@ def main():
 
     model = CharLSTM(len(stoi), args.embed_dim, args.hidden_size, seed=args.seed)
     optimizer = Adam(model.parameters(), lr=args.lr)
+    loader = DataLoader(TensorDataset(x, y), batch_size=args.batch_size, shuffle=True, seed=args.seed)
 
     for epoch in range(1, args.epochs + 1):
-        optimizer.zero_grad()
-        logits, _ = model(x)
-        loss = softmax_cross_entropy(logits.reshape(-1, len(stoi)), y.reshape(-1))
-        loss.backward()
-        clip_grad_norm_(model.parameters(), args.grad_clip)
-        optimizer.step()
+        total_loss, total_correct, total_count = 0.0, 0, 0
+        for x_batch, y_batch in loader:
+            optimizer.zero_grad()
+            logits, _ = model(x_batch)
+            targets = y_batch.reshape(-1).astype(np.int64)
+            loss = softmax_cross_entropy(logits.reshape(-1, len(stoi)), targets)
+            loss.backward()
+            clip_grad_norm_(model.parameters(), args.grad_clip)
+            optimizer.step()
+
+            total_loss += loss.item() * len(targets)
+            total_correct += int((logits.data.argmax(axis=-1).reshape(-1) == targets).sum())
+            total_count += len(targets)
 
         if epoch == 1 or epoch % 50 == 0 or epoch == args.epochs:
-            predicted = logits.data.argmax(axis=-1)
-            accuracy = float((predicted.reshape(-1) == y.reshape(-1)).mean())
-            print(f"epoch={epoch:4d} loss={loss.item():.5f} next_char_accuracy={accuracy:.3f}")
+            print(f"epoch={epoch:4d} loss={total_loss / total_count:.5f} next_char_accuracy={total_correct / total_count:.3f}")
 
     args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
     save_checkpoint(model, args.checkpoint)
