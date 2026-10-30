@@ -17,6 +17,7 @@ from .optim import (
 )
 from .checkpoint import save_checkpoint, load_checkpoint, save_training_state, load_training_state
 from .autograd import grad, hvp, hessian, newton_step
+from .diagnostics import explain_nan, explain_gradient, NaNReport, GradientDerivation
 from .testing import GradcheckResult, gradcheck, gradcheck_multi
 from .data import Dataset, TensorDataset, CSVDataset, DataLoader
 from .engine import Trainer, History, EarlyStopping, binary_accuracy, multiclass_accuracy, r_squared
@@ -35,6 +36,7 @@ __all__ = [
     "StepLR", "CosineAnnealingLR", "LinearWarmupLR",
     "save_checkpoint", "load_checkpoint", "save_training_state", "load_training_state",
     "grad", "hvp", "hessian", "newton_step",
+    "explain_nan", "explain_gradient", "NaNReport", "GradientDerivation",
     "GradcheckResult", "gradcheck", "gradcheck_multi",
     "Dataset", "TensorDataset", "CSVDataset", "DataLoader",
     "Trainer", "History", "EarlyStopping", "binary_accuracy", "multiclass_accuracy", "r_squared",

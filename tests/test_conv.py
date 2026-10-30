@@ -7,6 +7,81 @@ from minigrad import (
 )
 
 
+@pytest.mark.parametrize("kernel_size, stride", [(2, 1), (3, 1), (2, 2), (3, 2), (3, 3)])
+def test_unfold2d_matches_manual_sliding_window(kernel_size, stride):
+    x_data = np.random.default_rng(0).standard_normal((2, 3, 9, 9))
+    x = Tensor(x_data)
+    windows = x.unfold2d(kernel_size, stride=stride)
+    h_out = (9 - kernel_size) // stride + 1
+    w_out = (9 - kernel_size) // stride + 1
+    assert windows.shape == (2, 3, h_out, w_out, kernel_size, kernel_size)
+    manual = np.zeros(windows.shape)
+    for i in range(h_out):
+        for j in range(w_out):
+            manual[:, :, i, j] = x_data[:, :, i * stride : i * stride + kernel_size, j * stride : j * stride + kernel_size]
+    np.testing.assert_allclose(windows.data, manual)
+
+
+@pytest.mark.parametrize("kernel_size, stride", [(2, 1), (3, 1), (2, 2), (3, 2)])
+def test_unfold2d_gradcheck(kernel_size, stride):
+    x = Tensor(np.random.default_rng(1).standard_normal((2, 2, 7, 7)), requires_grad=True)
+    assert gradcheck(lambda t: (t.unfold2d(kernel_size, stride=stride) ** 2).sum(), x).passed
+
+
+def test_unfold2d_is_safe_on_non_contiguous_input():
+    x = Tensor(np.asfortranarray(np.random.default_rng(2).standard_normal((2, 3, 7, 7))), requires_grad=True)
+    windows = x.unfold2d(3, stride=1)
+    manual = np.zeros((2, 3, 5, 5, 3, 3))
+    for i in range(5):
+        for j in range(5):
+            manual[:, :, i, j] = x.data[:, :, i : i + 3, j : j + 3]
+    np.testing.assert_allclose(windows.data, manual)
+    assert gradcheck(lambda t: (t.unfold2d(3, stride=1) ** 2).sum(), x).passed
+
+
+def test_unfold2d_rejects_non_4d_input():
+    with pytest.raises(ValueError):
+        Tensor(np.random.randn(5)).unfold2d(2)
+
+
+def test_unfold2d_rejects_oversized_kernel():
+    with pytest.raises(ValueError):
+        Tensor(np.random.randn(1, 1, 5, 5)).unfold2d(10)
+
+
+def test_unfold2d_create_graph_raises_clear_error():
+    x = Tensor(np.random.randn(1, 1, 5, 5), requires_grad=True)
+    out = (x.unfold2d(3) ** 2).sum()
+    with pytest.raises(NotImplementedError):
+        out.backward(create_graph=True)
+
+
+def test_conv2d_matches_reference_loop_implementation():
+    from minigrad import stack as _stack
+
+    def reference_conv(conv, x):
+        x_padded = x
+        N, C, H, W = x_padded.shape
+        k, s = conv.kernel_size, conv.stride
+        h_out = (H - k) // s + 1
+        w_out = (W - k) // s + 1
+        patches = []
+        for i in range(h_out):
+            for j in range(w_out):
+                patch = x_padded[:, :, i * s : i * s + k, j * s : j * s + k]
+                patches.append(patch.reshape(N, C * k * k))
+        col = _stack(patches, axis=1)
+        weight_flat = conv.weight.reshape(conv.out_channels, C * k * k).transpose(1, 0)
+        out_flat = col @ weight_flat
+        return out_flat.transpose(0, 2, 1).reshape(N, conv.out_channels, h_out, w_out) + conv.bias
+
+    conv = Conv2d(3, 4, kernel_size=3, stride=1, padding=0, seed=0)
+    x = Tensor(np.random.default_rng(3).standard_normal((2, 3, 10, 10)))
+    fast_out = conv(x)
+    reference_out = reference_conv(conv, x)
+    np.testing.assert_allclose(fast_out.data, reference_out.data, atol=1e-8)
+
+
 def test_pad2d_shape_and_gradcheck():
     x = Tensor(np.random.randn(2, 3, 5, 5), requires_grad=True)
     out = pad2d(x, 2)
@@ -135,3 +210,4 @@ def test_tiny_cnn_end_to_end_forward_shape():
     x = Tensor(np.random.randn(5, 1, 8, 8))
     out = model(x)
     assert out.shape == (5, 3)
+    

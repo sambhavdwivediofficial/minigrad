@@ -43,6 +43,7 @@ The core autodiff primitive: a NumPy array plus a gradient buffer and a position
 - `.reshape(*shape) -> Tensor` — *hand-derived* (backward is just reshaping `out.grad` back to the original shape).
 - `.transpose(*axes) -> Tensor` — *hand-derived.* No arguments reverses all axes (like `np.transpose`); given axes must be a full permutation (one index per dimension).
 - `.swapaxes(axis1, axis2) -> Tensor` — *composed* (builds the full permutation with just those two axes swapped and calls `.transpose(*perm)`). Supports negative axis indices. This is what `scaled_dot_product_attention` uses for `k.swapaxes(-1, -2)` regardless of how many batch dimensions `k` has.
+- `.unfold2d(kernel_size, stride=1) -> Tensor` — *hand-derived.* Extracts every sliding `[kernel_size, kernel_size]` window of a `[N, C, H, W]` tensor as a single vectorized view (`numpy.lib.stride_tricks.as_strided`, no Python loop), returning shape `[N, C, H_out, W_out, kernel_size, kernel_size]`. This is what `Conv2d`/`MaxPool2d`/`AvgPool2d` are built on. See [`docs/architecture.md`](architecture.md#11-unfold2d-the-one-new-hand-derived-op-added-for-speed). Raises `ValueError` on a non-4-D input or a kernel larger than the input. Does not support `create_graph=True` (raises `NotImplementedError`), for the same reason `__getitem__` doesn't.
 - `__getitem__(index) -> Tensor` — *hand-derived.* Supports NumPy basic and fancy/integer indexing. Backward uses `np.add.at`, so **repeated indices correctly accumulate** gradient (this is what makes an embedding-style gather differentiable).
 
 **Nonlinearities** *(all hand-derived except where noted)*
@@ -97,7 +98,7 @@ Normalizes each feature over the **batch** dimension at train time (and updates 
 Zero-pads a `[N, C, H, W]` tensor by `padding` on every side of `H` and `W`. *Composed* (via `concatenate` with zero tensors — see [`docs/architecture.md`](architecture.md#7-cnns-rnns-and-attention-pushing-composition-as-far-as-it-goes)).
 
 ### `class Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, seed=None)`
-2-D convolution over `[N, C_in, H, W] -> [N, C_out, H_out, W_out]`. *Composed entirely* from slicing, `reshape`, `stack`, a single 2-D `matmul`, and `transpose` — no convolution-specific backward code exists. See [`docs/architecture.md`](architecture.md#7-cnns-rnns-and-attention-pushing-composition-as-far-as-it-goes) for exactly how. Raises `ValueError` on non-positive channel/kernel sizes or invalid stride/padding.
+2-D convolution over `[N, C_in, H, W] -> [N, C_out, H_out, W_out]`. Built on `.unfold2d()` (window extraction) + `reshape` + a single batched `matmul` + `transpose` — the only hand-derived gradient rule involved is `unfold2d`'s own. See [`docs/architecture.md`](architecture.md#11-unfold2d-the-one-new-hand-derived-op-added-for-speed). Raises `ValueError` on non-positive channel/kernel sizes or invalid stride/padding.
 
 ### `class MaxPool2d(kernel_size, stride=None)` / `class AvgPool2d(kernel_size, stride=None)`
 Non-overlapping (or strided) spatial pooling over `[N, C, H, W]`. `stride` defaults to `kernel_size`. *Composed* via slicing + `reshape` + `.max(axis=...)` / `.mean(axis=...)`.
@@ -245,6 +246,31 @@ The full Hessian matrix, built by calling `hvp` once per standard basis vector (
 
 ### `newton_step(fn: Callable[[Tensor], Tensor], x: Tensor, damping=1e-6) -> np.ndarray`
 One step of damped Newton's method: `x - (H + damping·I)⁻¹g`. For a true quadratic `fn`, a single call with `damping=0` lands exactly on the minimum — see `tests/test_second_order.py::test_newton_step_reaches_quadratic_minimum_in_one_step`.
+
+---
+
+## `minigrad.diagnostics`
+
+Two tools that read a computation graph's own `_prev`/`_op` structure to explain it back to you — see [`docs/architecture.md`](architecture.md#12-diagnostics-making-the-graphs-own-structure-explain-itself) for why this is only straightforward because MiniGrad's graph is plain Python objects. `examples/diagnostics_demo.py` runs both on several realistic scenarios.
+
+### `explain_nan(tensor: Tensor) -> NaNReport`
+Walks the graph feeding `tensor` and finds the **first** node (in forward order) whose data contains a NaN or Inf. Returns a `NaNReport`:
+- `.found: bool`
+- `.op: str` — the operation that produced the bad value (or `"input"` if a leaf tensor already contained it)
+- `.shape`, `.bad_count`, `.total_count`
+- `.hint: str | None` — a specific likely-cause suggestion for common culprits (`log`, `/`, `exp`, `pow(0.5)`, `sigmoid`)
+- `.path_from_root: list[str]` — one path of op names from the bad node back to `tensor`
+- `.summary() -> str` (also `__repr__`) — the human-readable report; see the examples above for its exact shape.
+
+If several branches independently produce NaNs at the same point in the graph, only one is reported — a fast way to find *a* root cause, not an exhaustive audit (see `LIMITATIONS.md`).
+
+### `explain_gradient(fn, x: Tensor, eps=1e-6, atol=1e-5, rtol=1e-3) -> GradientDerivation`
+For a scalar `fn(x)`, lists every op on the path from `x` to the output together with a human-readable statement of its local derivative rule, then runs `gradcheck` and attaches the result as verification. Returns a `GradientDerivation`:
+- `.steps: list[tuple[str, str]]` — `(op_name, rule_text)` pairs, in forward order
+- `.verified: bool`, `.max_absolute_error`, `.max_relative_error` — the backing `gradcheck` result
+- `.summary() -> str` (also `__repr__`)
+
+Raises `ValueError` if `fn(x)` isn't scalar or `x.requires_grad` is `False`. Works through any composed layer, including `Conv2d` (where it lists `unfold2d` as one of the steps).
 
 ---
 
