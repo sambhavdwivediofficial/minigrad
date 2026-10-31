@@ -210,4 +210,3 @@ def test_tiny_cnn_end_to_end_forward_shape():
     x = Tensor(np.random.randn(5, 1, 8, 8))
     out = model(x)
     assert out.shape == (5, 3)
-    

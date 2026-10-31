@@ -423,6 +423,44 @@ class Tensor:
         out._backward = _backward
         return out
 
+    def unfold2d(self, kernel_size: int, stride: int = 1) -> "Tensor":
+        if self.data.ndim != 4:
+            raise ValueError(f"unfold2d requires a 4-D [N, C, H, W] tensor, got shape {self.data.shape}")
+        N, C, H, W = self.data.shape
+        if kernel_size > H or kernel_size > W:
+            raise ValueError(f"kernel_size={kernel_size} is larger than the input spatial size ({H}, {W})")
+        h_out = (H - kernel_size) // stride + 1
+        w_out = (W - kernel_size) // stride + 1
+        s0, s1, s2, s3 = self.data.strides
+        window_shape = (N, C, h_out, w_out, kernel_size, kernel_size)
+        window_strides = (s0, s1, s2 * stride, s3 * stride, s2, s3)
+        windows = np.lib.stride_tricks.as_strided(
+            self.data, shape=window_shape, strides=window_strides, writeable=False
+        )
+        value = windows.copy()
+        out = Tensor(value, self.requires_grad, (self,), "unfold2d")
+
+        def _backward():
+            if self.requires_grad:
+                if isinstance(out.grad, Tensor):
+                    raise NotImplementedError(
+                        "second-order gradients are not yet supported through unfold2d, for the "
+                        "same reason as __getitem__: scattering a Tensor's values back into "
+                        "overlapping input positions has no composed equivalent yet. This affects "
+                        "Conv2d, MaxPool2d, and AvgPool2d, which are all built on unfold2d. See "
+                        "LIMITATIONS.md."
+                    )
+                grad_full = np.zeros_like(self.data)
+                for i in range(kernel_size):
+                    for j in range(kernel_size):
+                        grad_full[:, :, i : i + stride * h_out : stride, j : j + stride * w_out : stride] += (
+                            out.grad[:, :, :, :, i, j]
+                        )
+                self._accumulate_grad(grad_full)
+
+        out._backward = _backward
+        return out
+
     def relu(self) -> "Tensor":
         out = Tensor(np.maximum(self.data, 0.0), self.requires_grad, (self,), "relu")
 

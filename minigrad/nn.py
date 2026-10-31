@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 import numpy as np
-from .tensor import Tensor, where, concatenate, stack
+from .tensor import Tensor, where, concatenate
 
 
 class Module:
@@ -314,22 +314,12 @@ class Conv2d(Module):
 
     def forward(self, x: Tensor) -> Tensor:
         x = pad2d(x, self.padding)
-        N, C, H, W = x.shape
-        k = self.kernel_size
-        s = self.stride
-        h_out = (H - k) // s + 1
-        w_out = (W - k) // s + 1
-
-        patches = []
-        for i in range(h_out):
-            for j in range(w_out):
-                patch = x[:, :, i * s : i * s + k, j * s : j * s + k]
-                patches.append(patch.reshape(N, C * k * k))
-        col = stack(patches, axis=1)
-
-        weight_flat = self.weight.reshape(self.out_channels, C * k * k).transpose(1, 0)
-        out_flat = col @ weight_flat
-        out = out_flat.transpose(0, 2, 1).reshape(N, self.out_channels, h_out, w_out)
+        windows = x.unfold2d(self.kernel_size, self.stride)
+        N, C, h_out, w_out, kH, kW = windows.shape
+        col = windows.transpose(0, 2, 3, 1, 4, 5).reshape(N, h_out, w_out, C * kH * kW)
+        weight_flat = self.weight.reshape(self.out_channels, C * kH * kW).transpose(1, 0)
+        out = col @ weight_flat
+        out = out.transpose(0, 3, 1, 2)
         return out + self.bias
 
 
@@ -342,20 +332,9 @@ class MaxPool2d(Module):
         self.stride = stride if stride is not None else kernel_size
 
     def forward(self, x: Tensor) -> Tensor:
-        N, C, H, W = x.shape
-        k = self.kernel_size
-        s = self.stride
-        h_out = (H - k) // s + 1
-        w_out = (W - k) // s + 1
-        rows = []
-        for i in range(h_out):
-            cols = []
-            for j in range(w_out):
-                patch = x[:, :, i * s : i * s + k, j * s : j * s + k]
-                pooled = patch.reshape(N, C, k * k).max(axis=2)
-                cols.append(pooled)
-            rows.append(stack(cols, axis=-1))
-        return stack(rows, axis=-2)
+        windows = x.unfold2d(self.kernel_size, self.stride)
+        N, C, h_out, w_out, kH, kW = windows.shape
+        return windows.reshape(N, C, h_out, w_out, kH * kW).max(axis=-1)
 
 
 class AvgPool2d(Module):
@@ -367,20 +346,9 @@ class AvgPool2d(Module):
         self.stride = stride if stride is not None else kernel_size
 
     def forward(self, x: Tensor) -> Tensor:
-        N, C, H, W = x.shape
-        k = self.kernel_size
-        s = self.stride
-        h_out = (H - k) // s + 1
-        w_out = (W - k) // s + 1
-        rows = []
-        for i in range(h_out):
-            cols = []
-            for j in range(w_out):
-                patch = x[:, :, i * s : i * s + k, j * s : j * s + k]
-                pooled = patch.reshape(N, C, k * k).mean(axis=2)
-                cols.append(pooled)
-            rows.append(stack(cols, axis=-1))
-        return stack(rows, axis=-2)
+        windows = x.unfold2d(self.kernel_size, self.stride)
+        N, C, h_out, w_out, kH, kW = windows.shape
+        return windows.reshape(N, C, h_out, w_out, kH * kW).mean(axis=-1)
 
 
 class Embedding(Module):

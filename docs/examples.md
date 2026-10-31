@@ -155,6 +155,25 @@ The script trains the same XOR-style model three ways: (1) for a first segment o
 
 ---
 
+## 9. `diagnostics_demo.py`
+
+Demonstrates: **`explain_nan` and `explain_gradient`** — see [`docs/architecture.md`](architecture.md#12-diagnostics-making-the-graphs-own-structure-explain-itself) for why these are only straightforward to build because the graph is plain, inspectable Python objects.
+
+```powershell
+python .\examples\diagnostics_demo.py
+```
+
+Five short scenarios, each printed in full:
+1. `explain_nan` on `log()` of a negative number — pinpoints the `log` op and suggests adding an epsilon or using `log_softmax`.
+2. `explain_nan` on a division by a zero variance (the kind of bug that shows up in a hand-written normalization layer) — pinpoints the `/` op and names the denominator as the likely cause.
+3. `explain_nan` on a healthy, ordinary model — confirms it correctly reports nothing wrong, not just that it can find problems.
+4. `explain_gradient` on a short `tanh` chain — lists `tanh`, `*`, `sum` with each one's derivative rule, then shows the `gradcheck` verification that proves the chain is correct, not just plausible.
+5. `explain_gradient` through a real `Conv2d` layer — the same report, automatically listing `unfold2d` (Section 11 of `docs/architecture.md`) as one of the steps.
+
+This example produces no model checkpoint and no training curve; it exists purely to show what the two diagnostic tools say when pointed at a real problem versus a healthy computation.
+
+---
+
 ## Predict scripts
 
 Every training example other than `train_xor.py` now has a matching predict script, mirroring `predict_xor.py`'s pattern (rebuild the same architecture, `load_checkpoint`, run one forward pass, print the result):
@@ -171,13 +190,15 @@ Every training example other than `train_xor.py` now has a matching predict scri
 
 ---
 
-## Shared machinery across all nine training scripts
+## Shared machinery across the eight training scripts
+
+(Sections 1–8 above. `diagnostics_demo.py`, Section 9, trains nothing — it exists purely to demonstrate `explain_nan` / `explain_gradient`.)
 
 | Piece | Where it lives | Used by |
 |---|---|---|
 | `TensorDataset` / `CSVDataset` / `DataLoader` | `minigrad.data` | regression, moons/spiral, tabular, char-LSTM, char-Transformer |
 | `Trainer` / `EarlyStopping` | `minigrad.engine` | regression, moons/spiral, tabular |
-| `save_checkpoint` / `load_checkpoint` | `minigrad.checkpoint` | all nine training scripts; every predict script |
+| `save_checkpoint` / `load_checkpoint` | `minigrad.checkpoint` | all eight training scripts; every predict script |
 | `save_training_state` / `load_training_state` | `minigrad.checkpoint` | `resume_training_demo.py` |
 | `plot_loss_curve` / `plot_decision_boundary` | `minigrad.visualization` | regression (loss curve), moons/spiral (boundary) |
 

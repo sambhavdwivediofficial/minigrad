@@ -289,3 +289,13 @@ python .\examples\resume_training_demo.py --first-segment-epochs 300 --second-se
 ```
 
 This example proves `save_training_state` / `load_training_state` resume training exactly: it trains a model two ways (interrupted-and-resumed vs. uninterrupted) and prints both final losses, which match to within floating-point precision.
+
+## 14. Diagnostics: Explain a NaN or a Gradient
+
+### Run All Five Demo Scenarios
+
+```powershell
+python .\examples\diagnostics_demo.py
+```
+
+This prints, in order: `explain_nan` pinpointing a `log()`-of-a-negative-number bug, `explain_nan` pinpointing a division-by-zero bug, `explain_nan` confirming a healthy model has nothing wrong, `explain_gradient` on a short `tanh` chain, and `explain_gradient` through a real `Conv2d` layer (showing `unfold2d` as one of the steps). No checkpoint or dataset is involved — it only demonstrates the two diagnostic tools.

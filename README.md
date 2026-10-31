@@ -139,6 +139,17 @@ python .\examples\resume_training_demo.py
 - **Predict scripts for every example:** `predict_regression.py`, `predict_moons.py`, `predict_spiral.py`, `predict_tabular.py`, and `predict_cnn_shapes.py` join `predict_xor.py`, each loading its matching checkpoint and running one prediction. See `docs/examples.md`.
 - **Transformer text generation:** `char_transformer_demo.py` is a `TransformerLM`-based counterpart to `char_lstm_demo.py` — same next-character-prediction task, generated through attention instead of recurrence.
 
+## Vectorized convolutions and two new diagnostic tools
+
+```powershell
+python .\examples\diagnostics_demo.py
+```
+
+- **`Tensor.unfold2d`, and a much faster `Conv2d`/`MaxPool2d`/`AvgPool2d`:** sliding windows are now extracted with `numpy.lib.stride_tricks.as_strided` (one vectorized NumPy call) instead of a Python loop over every output position. A 64×64 image's `Conv2d` forward+backward went from ~245ms to ~24ms in testing — roughly 10x, and the gap widens with image size — with byte-identical output and gradients to the loop-based version it replaced. See `docs/architecture.md`.
+- **`explain_nan(tensor)`:** walks a computation graph forward and reports the exact operation where a NaN or Inf *first* appeared — not just that the final loss is NaN — along with a likely-cause hint (`log` of a non-positive value, division by zero, `exp` overflow, ...).
+- **`explain_gradient(fn, x)`:** lists every operation on the path from `x` to `fn(x)`, each with a human-readable statement of its local derivative rule, then runs `gradcheck` and attaches the result as verification — the chain of rules shown is the literal sequence `Tensor.backward()` would execute, not a guess.
+- Both tools exist because this engine's computation graph is plain, inspectable Python objects rather than a compiled trace — see `docs/architecture.md` for why that makes them straightforward here and unusually hard to build on top of a compiled framework.
+
 ## Architecture
 
 ```text
