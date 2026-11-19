@@ -188,6 +188,149 @@ class GradientDerivation:
         return self.summary()
 
 
+@dataclass
+class StepRecord:
+    index: int
+    node_op: str
+    node_shape: tuple
+    grad_before: Optional[np.ndarray]
+    grad_after: Optional[np.ndarray]
+    parent_ops: list
+    parent_grads_before: list
+    has_nan_or_inf: bool
+
+    def summary(self) -> str:
+        lines = [f"Step {self.index}: '{self.node_op}' node, shape {self.node_shape}"]
+        if self.grad_before is None:
+            lines.append("  grad before this step: (none yet)")
+        else:
+            lines.append(f"  grad before this step: mean={self.grad_before.mean():.4g}, "
+                          f"abs-max={np.abs(self.grad_before).max():.4g}")
+        if self.grad_after is not None:
+            lines.append(f"  grad used to push into parents: mean={self.grad_after.mean():.4g}, "
+                         f"abs-max={np.abs(self.grad_after).max():.4g}")
+        if self.parent_ops:
+            lines.append(f"  pushed a contribution into {len(self.parent_ops)} parent(s): {', '.join(self.parent_ops)}")
+        else:
+            lines.append("  this is a leaf — nothing further to push into")
+        if self.has_nan_or_inf:
+            lines.append("  *** this node's OWN data already contains NaN/Inf ***")
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        return self.summary()
+
+
+class GradientDebugger:
+    def __init__(self, output: Tensor, gradient=None):
+        if output.data.size != 1 and gradient is None:
+            raise ValueError("gradient must be supplied for a non-scalar output")
+        self.output = output
+        self._topo = _topo_order(output)
+        self._reversed_topo = list(reversed(self._topo))
+        self._pointer = -1
+        self._started = False
+        self._initial_gradient = gradient
+        self.history: list = []
+
+    @property
+    def total_steps(self) -> int:
+        return len(self._reversed_topo)
+
+    @property
+    def pointer(self) -> int:
+        return self._pointer
+
+    def is_done(self) -> bool:
+        return self._pointer >= len(self._reversed_topo) - 1
+
+    def remaining(self) -> int:
+        return len(self._reversed_topo) - 1 - self._pointer
+
+    def current_node(self) -> Optional[Tensor]:
+        if self._pointer < 0 or self._pointer >= len(self._reversed_topo):
+            return None
+        return self._reversed_topo[self._pointer]
+
+    def peek_grad(self, tensor: Tensor) -> Optional[np.ndarray]:
+        return None if tensor.grad is None else np.array(tensor.grad, copy=True)
+
+    def inject(self, tensor: Tensor, new_grad) -> None:
+        tensor.grad = np.asarray(new_grad, dtype=np.float64).copy()
+
+    def step(self) -> StepRecord:
+        if self.is_done():
+            raise StopIteration("backward pass already complete: call .reset() to start over")
+        if not self._started:
+            gradient = (
+                np.ones_like(self.output.data)
+                if self._initial_gradient is None
+                else np.asarray(self._initial_gradient, dtype=np.float64)
+            )
+            self.output._accumulate_grad(gradient)
+            self._started = True
+
+        self._pointer += 1
+        node = self._reversed_topo[self._pointer]
+        grad_before = self.peek_grad(node)
+        parent_grads_before = [(p, self.peek_grad(p)) for p in node._prev]
+
+        node._backward()
+
+        record = StepRecord(
+            index=self._pointer,
+            node_op=node._op or "input",
+            node_shape=node.data.shape,
+            grad_before=grad_before,
+            grad_after=self.peek_grad(node),
+            parent_ops=[p._op or "leaf" for p in node._prev],
+            parent_grads_before=parent_grads_before,
+            has_nan_or_inf=bool((~np.isfinite(node.data)).any()),
+        )
+        record._node = node
+        record._grad_at_step = record.grad_after
+        self.history.append(record)
+        return record
+
+    def step_all(self) -> list:
+        records = []
+        while not self.is_done():
+            records.append(self.step())
+        return records
+
+    def undo(self) -> StepRecord:
+        if not self.history:
+            raise IndexError("no steps to undo")
+        record = self.history.pop()
+        node = record._node
+        for parent, grad_before in record.parent_grads_before:
+            parent.grad = grad_before
+        self._pointer -= 1
+        return record
+
+    def step_until_magnitude_jump(self, factor: float = 10.0) -> Optional[StepRecord]:
+        previous_norm = None
+        while not self.is_done():
+            record = self.step()
+            if record.grad_after is None:
+                continue
+            current_norm = float(np.linalg.norm(record.grad_after))
+            if previous_norm is not None and previous_norm > 0 and current_norm > factor * previous_norm:
+                return record
+            previous_norm = current_norm
+        return None
+
+    def reset(self) -> None:
+        self._pointer = -1
+        self._started = False
+        self.history = []
+
+    def timeline(self) -> str:
+        if not self.history:
+            return "(no steps taken yet)"
+        return "\n\n".join(record.summary() for record in self.history)
+
+
 def explain_gradient(fn, x: Tensor, eps: float = 1e-6, atol: float = 1e-5, rtol: float = 1e-3) -> GradientDerivation:
     if not x.requires_grad:
         raise ValueError("explain_gradient requires x.requires_grad=True")
