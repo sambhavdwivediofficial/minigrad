@@ -288,7 +288,6 @@ class GradientDebugger:
             has_nan_or_inf=bool((~np.isfinite(node.data)).any()),
         )
         record._node = node
-        record._grad_at_step = record.grad_after
         self.history.append(record)
         return record
 
