@@ -228,6 +228,7 @@ class GradientDebugger:
         self.output = output
         self._topo = _topo_order(output)
         self._reversed_topo = list(reversed(self._topo))
+        self._index_of = {id(node): i for i, node in enumerate(self._reversed_topo)}
         self._pointer = -1
         self._started = False
         self._initial_gradient = gradient
@@ -252,10 +253,24 @@ class GradientDebugger:
             return None
         return self._reversed_topo[self._pointer]
 
+    def peek_next_node(self) -> Optional[Tensor]:
+        next_index = self._pointer + 1
+        if next_index >= len(self._reversed_topo):
+            return None
+        return self._reversed_topo[next_index]
+
     def peek_grad(self, tensor: Tensor) -> Optional[np.ndarray]:
         return None if tensor.grad is None else np.array(tensor.grad, copy=True)
 
     def inject(self, tensor: Tensor, new_grad) -> None:
+        node_index = self._index_of.get(id(tensor))
+        if node_index is not None and node_index <= self._pointer:
+            raise ValueError(
+                "this node's _backward() has already run and already pushed its (old) "
+                "contribution into its parents — injecting now has no visible effect. "
+                "Use peek_next_node() to find a node whose turn hasn't come yet, or "
+                "undo() back past this node first."
+            )
         tensor.grad = np.asarray(new_grad, dtype=np.float64).copy()
 
     def step(self) -> StepRecord:
