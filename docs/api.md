@@ -28,7 +28,7 @@ The core autodiff primitive: a NumPy array plus a gradient buffer and a position
 - `.numpy() -> np.ndarray` — a **copy** of `.data` (safe to mutate without affecting the graph).
 - `.detach() -> Tensor` — a new leaf `Tensor` with `requires_grad=False`, copied data, no graph history. Use this before feeding a result into metrics/plots so you don't accidentally build graph you'll never call `.backward()` on.
 - `.zero_grad()` — resets `.grad` to zeros (no-op if `requires_grad=False`).
-- `.backward(gradient=None, create_graph=False)` — runs reverse-mode autodiff from this tensor back through the graph. `gradient=None` is only valid for scalar tensors (defaults to `1.0`); non-scalar tensors require an explicit `gradient` array of matching shape (vector-Jacobian product convention). Raises `RuntimeError` if `requires_grad=False`, raises `ValueError` on a shape mismatch. `create_graph=True` makes every touched tensor's `.grad` a differentiable `Tensor` instead of a plain array, so a second `.backward()` call can differentiate through the first one (second-order gradients) — not supported through `__getitem__`'s own backward rule; see [`docs/architecture.md`](architecture.md#9-second-order-autodiff-differentiating-through-backward-itself) and `minigrad.autograd` below.
+- `.backward(gradient=None, create_graph=False)` — runs reverse-mode autodiff from this tensor back through the graph. `gradient=None` is only valid for scalar tensors (defaults to `1.0`); non-scalar tensors require an explicit `gradient` array of matching shape (vector-Jacobian product convention). Raises `RuntimeError` if `requires_grad=False`, raises `ValueError` on a shape mismatch. `create_graph=True` makes every touched tensor's `.grad` a differentiable `Tensor` instead of a plain array, so a second `.backward()` call can differentiate through the first one (second-order gradients) — supported through `__getitem__` for any index pattern; not yet supported through `.unfold2d()`'s own backward rule (so not through `Conv2d`/`MaxPool2d`/`AvgPool2d`); see [`docs/architecture.md`](architecture.md#9-second-order-autodiff-differentiating-through-backward-itself) and `minigrad.autograd` below.
 
 **Arithmetic operators** *(all hand-derived; all support a plain Python/NumPy scalar or array on the other side, auto-wrapped into a `Tensor`)*
 `+`, `-` (binary and unary), `*`, `/`, `** power` (scalar exponent only — `TypeError` on a non-scalar power), `@` (matmul — true batched matmul: both operands need at least 2 dimensions, the last two are the actual matrix multiply, and every dimension before that broadcasts like `np.matmul`; `ValueError` on fewer than 2 dimensions or a mismatched inner dimension). See [`docs/architecture.md`](architecture.md#8-true-batched-matmul).
@@ -43,7 +43,7 @@ The core autodiff primitive: a NumPy array plus a gradient buffer and a position
 - `.reshape(*shape) -> Tensor` — *hand-derived* (backward is just reshaping `out.grad` back to the original shape).
 - `.transpose(*axes) -> Tensor` — *hand-derived.* No arguments reverses all axes (like `np.transpose`); given axes must be a full permutation (one index per dimension).
 - `.swapaxes(axis1, axis2) -> Tensor` — *composed* (builds the full permutation with just those two axes swapped and calls `.transpose(*perm)`). Supports negative axis indices. This is what `scaled_dot_product_attention` uses for `k.swapaxes(-1, -2)` regardless of how many batch dimensions `k` has.
-- `.unfold2d(kernel_size, stride=1) -> Tensor` — *hand-derived.* Extracts every sliding `[kernel_size, kernel_size]` window of a `[N, C, H, W]` tensor as a single vectorized view (`numpy.lib.stride_tricks.as_strided`, no Python loop), returning shape `[N, C, H_out, W_out, kernel_size, kernel_size]`. This is what `Conv2d`/`MaxPool2d`/`AvgPool2d` are built on. See [`docs/architecture.md`](architecture.md#11-unfold2d-the-one-new-hand-derived-op-added-for-speed). Raises `ValueError` on a non-4-D input or a kernel larger than the input. Does not support `create_graph=True` (raises `NotImplementedError`), for the same reason `__getitem__` doesn't.
+- `.unfold2d(kernel_size, stride=1) -> Tensor` — *hand-derived.* Extracts every sliding `[kernel_size, kernel_size]` window of a `[N, C, H, W]` tensor as a single vectorized view (`numpy.lib.stride_tricks.as_strided`, no Python loop), returning shape `[N, C, H_out, W_out, kernel_size, kernel_size]`. This is what `Conv2d`/`MaxPool2d`/`AvgPool2d` are built on. See [`docs/architecture.md`](architecture.md#11-unfold2d-the-one-new-hand-derived-op-added-for-speed). Raises `ValueError` on a non-4-D input or a kernel larger than the input. Does not support `create_graph=True` (raises `NotImplementedError`) — unlike `__getitem__`, its backward's overlapping-window accumulation has no differentiable equivalent yet; see [`docs/architecture.md`](architecture.md#9-second-order-autodiff-differentiating-through-backward-itself).
 - `__getitem__(index) -> Tensor` — *hand-derived.* Supports NumPy basic and fancy/integer indexing. Backward uses `np.add.at` (first-order) or a one-hot-matmul scatter (`create_graph=True`, see [`docs/architecture.md`](architecture.md#9-second-order-autodiff-differentiating-through-backward-itself)), so **repeated indices correctly accumulate** gradient in both modes (this is what makes an embedding-style gather differentiable, including its second derivative).
 
 **Nonlinearities** *(all hand-derived except where noted)*
@@ -233,7 +233,7 @@ Plain dataclass: `.train_loss`, `.val_loss`, `.train_metrics`, `.val_metrics` �
 
 ## `minigrad.autograd`
 
-Second-order autodiff, built on `Tensor.backward(create_graph=True)` (see [`docs/architecture.md`](architecture.md#9-second-order-autodiff-differentiating-through-backward-itself) for how that works internally). Every function below only works through forward passes that avoid `Tensor.__getitem__` internally — see `LIMITATIONS.md` for exactly which layers that excludes.
+Second-order autodiff, built on `Tensor.backward(create_graph=True)` (see [`docs/architecture.md`](architecture.md#9-second-order-autodiff-differentiating-through-backward-itself) for how that works internally). Every function below works through `Linear`, `LayerNorm`, `BatchNorm1d`, `Dropout`, `Embedding`, every loss function, and the full `RNN`/`LSTM`/`GRU` sequence wrappers; it does not yet work through a forward pass that used `.unfold2d()` (so not through `Conv2d`, `MaxPool2d`, `AvgPool2d`) — see `LIMITATIONS.md`.
 
 ### `grad(output: Tensor, inputs: Tensor | Sequence[Tensor], create_graph=False)`
 Convenience wrapper: zeroes `.grad` on every tensor in `inputs`, calls `output.backward(create_graph=create_graph)`, and returns the resulting `.grad` for each input (a single value if `inputs` was a single `Tensor`, a list otherwise). `output` must be a scalar `Tensor`; every tensor in `inputs` must have `requires_grad=True`. Chaining two calls — the second with `create_graph=False` on a scalar built from the first call's (Tensor-valued) result — is how to get a second derivative without touching `.backward()` directly.
@@ -271,6 +271,23 @@ For a scalar `fn(x)`, lists every op on the path from `x` to the output together
 - `.summary() -> str` (also `__repr__`)
 
 Raises `ValueError` if `fn(x)` isn't scalar or `x.requires_grad` is `False`. Works through any composed layer, including `Conv2d` (where it lists `unfold2d` as one of the steps).
+
+### `class GradientDebugger(output: Tensor, gradient=None)`
+Steps through `output.backward()`'s traversal one node at a time instead of running it all at once. `output` must be scalar unless `gradient` is given explicitly (same convention as `Tensor.backward()`). See [`docs/architecture.md`](architecture.md#12-diagnostics-making-the-graphs-own-structure-explain-itself).
+
+- `.step() -> StepRecord` — runs exactly one node's `_backward()` (the next one in `backward()`'s own reverse-topological order) and returns a snapshot of what happened. Raises `StopIteration` once the pass is complete.
+- `.step_all() -> list[StepRecord]` — runs every remaining step; the result is identical to calling `output.backward()` directly.
+- `.undo() -> StepRecord` — reverses the most recent step, restoring every parent's gradient to what it was immediately before that step. Raises `IndexError` if no steps have been taken.
+- `.step_until_magnitude_jump(factor=10.0) -> StepRecord | None` — auto-steps until one step's outgoing gradient norm exceeds `factor` times the previous step's, and returns that step (or `None` if the pass completes with no such jump). The fast way to find *which operation* exploded a gradient.
+- `.peek_grad(tensor) -> np.ndarray | None` — the tensor's current accumulated gradient, without changing anything.
+- `.peek_next_node() -> Tensor | None` — the tensor whose `_backward()` the *next* `.step()` call will run; `None` if the pass is already complete.
+- `.current_node() -> Tensor | None` — the tensor whose `_backward()` the *most recent* `.step()` call ran.
+- `.inject(tensor, new_grad)` — overwrites `tensor.grad`, for a genuine "what if this gradient had been different?" check on the rest of the replay. Only valid on a node `peek_next_node()` would return (or anything further still unprocessed) — raises `ValueError` if `tensor`'s turn has already passed, since the contribution it would have pushed is already gone.
+- `.reset()` — starts the same replay over from the beginning.
+- `.total_steps`, `.pointer`, `.remaining()`, `.is_done()`, `.history` (the list of every `StepRecord` produced so far), `.timeline()` (all of `.history`, pretty-printed).
+
+### `class StepRecord`
+One `.step()` call's result: `.index`, `.node_op`, `.node_shape`, `.grad_before`, `.grad_after`, `.parent_ops`, `.has_nan_or_inf`, and `.summary()` (also `__repr__`).
 
 ---
 
