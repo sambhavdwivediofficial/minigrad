@@ -150,24 +150,101 @@ def test_rnn_cell_single_step_supports_create_graph():
     assert isinstance(h.grad, Tensor)
 
 
-def test_getitem_raises_clear_error_under_create_graph():
-    x = Tensor(np.random.randn(5), requires_grad=True)
-    out = (x[np.array([0, 1, 2])] ** 2).sum()
-    with pytest.raises(NotImplementedError):
-        out.backward(create_graph=True)
+def test_getitem_second_derivative_matches_closed_form_with_repeated_indices():
+    x = Tensor([2.0, -1.0, 3.0, 0.5, -2.0], requires_grad=True)
+    idx = np.array([0, 2, 0, 4])
+    y = (x[idx] ** 3).sum()
+    y.backward(create_graph=True)
+    first = x.grad
+    assert isinstance(first, Tensor)
+    expected_first = np.zeros(5)
+    np.add.at(expected_first, idx, 3 * x.data[idx] ** 2)
+    np.testing.assert_allclose(first.data, expected_first)
+
+    x.grad = None
+    first.sum().backward()
+    expected_second = np.zeros(5)
+    np.add.at(expected_second, idx, 6 * x.data[idx])
+    np.testing.assert_allclose(x.grad, expected_second)
+
+
+def test_getitem_second_derivative_matches_independent_finite_difference():
+    idx = np.array([0, 2, 0, 4])
+
+    def grad_at(xv):
+        xt = Tensor(xv, requires_grad=True)
+        (xt[idx] ** 3).sum().backward()
+        return xt.grad.copy()
+
+    x0 = np.array([2.0, -1.0, 3.0, 0.5, -2.0])
+    eps = 1e-4
+    numeric_second = np.zeros(5)
+    for i in range(5):
+        xp, xm = x0.copy(), x0.copy()
+        xp[i] += eps
+        xm[i] -= eps
+        numeric_second[i] = (grad_at(xp)[i] - grad_at(xm)[i]) / (2 * eps)
+
+    x = Tensor(x0, requires_grad=True)
+    first = (x[idx] ** 3).sum()
+    first.backward(create_graph=True)
+    x.grad.sum().backward()
+
+    np.testing.assert_allclose(numeric_second, x.grad, atol=1e-3)
+
+
+def test_embedding_second_derivative_with_repeated_index():
+    emb = Embedding(5, 1, seed=0)
+    emb.weight = Tensor(np.array([[1.0], [2.0], [3.0], [4.0], [5.0]]), requires_grad=True)
+    idx = np.array([0, 0, 2])
+    out = (emb(idx) ** 3).sum()
+    out.backward(create_graph=True)
+    first = emb.weight.grad
+    assert isinstance(first, Tensor)
+    expected_first = np.zeros((5, 1))
+    np.add.at(expected_first, idx, 3 * emb.weight.data[idx] ** 2)
+    np.testing.assert_allclose(first.data, expected_first)
+
+    emb.weight.grad = None
+    first.sum().backward()
+    expected_second = np.zeros((5, 1))
+    np.add.at(expected_second, idx, 6 * emb.weight.data[idx])
+    np.testing.assert_allclose(emb.weight.grad, expected_second)
+
+
+def test_softmax_cross_entropy_supports_create_graph():
+    from minigrad.nn import softmax_cross_entropy
+
+    logits = Tensor(np.random.default_rng(0).standard_normal((4, 3)), requires_grad=True)
+    targets = np.array([0, 1, 2, 0])
+    loss = softmax_cross_entropy(logits, targets)
+    loss.backward(create_graph=True)
+    assert isinstance(logits.grad, Tensor)
+    scalar = (logits.grad ** 2).sum()
+    logits.grad = None
+    scalar.backward()
+    assert np.all(np.isfinite(logits.grad))
+
+
+def test_rnn_sequence_wrapper_supports_create_graph():
+    from minigrad.recurrent import RNN
+
+    rnn = RNN(3, 4, seed=0)
+    x = Tensor(np.random.default_rng(1).standard_normal((2, 5, 3)), requires_grad=True)
+    out, _ = rnn(x)
+    loss = (out ** 2).sum()
+    loss.backward(create_graph=True)
+    assert isinstance(x.grad, Tensor)
+    scalar = (x.grad ** 2).sum()
+    x.grad = None
+    scalar.backward()
+    assert np.all(np.isfinite(x.grad))
 
 
 def test_conv2d_raises_clear_error_under_create_graph():
     conv = Conv2d(1, 2, kernel_size=3, padding=1, seed=0)
     x = Tensor(np.random.randn(1, 1, 5, 5), requires_grad=True)
     out = (conv(x) ** 2).sum()
-    with pytest.raises(NotImplementedError):
-        out.backward(create_graph=True)
-
-
-def test_embedding_raises_clear_error_under_create_graph():
-    emb = Embedding(10, 4, seed=0)
-    out = (emb(np.array([1, 2, 3])) ** 2).sum()
     with pytest.raises(NotImplementedError):
         out.backward(create_graph=True)
 
