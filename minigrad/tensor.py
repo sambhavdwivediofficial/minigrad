@@ -91,6 +91,58 @@ def _getitem_backward_tensor(source_shape: tuple[int, ...], index, out_grad: "Te
     return grad_flat.reshape(source_shape)
 
 
+def _dilate_axis(g: "Tensor", axis: int, stride: int) -> "Tensor":
+    if stride == 1:
+        return g
+    n = g.shape[axis]
+    shape_unsqueezed = list(g.shape)
+    shape_unsqueezed.insert(axis + 1, 1)
+    g_unsqueezed = g.reshape(*shape_unsqueezed)
+    zero_shape = list(shape_unsqueezed)
+    zero_shape[axis + 1] = stride - 1
+    zeros = Tensor(np.zeros(zero_shape))
+    merged = concatenate([g_unsqueezed, zeros], axis=axis + 1)
+    flat_shape = list(g.shape)
+    flat_shape[axis] = n * stride
+    flat = merged.reshape(*flat_shape)
+    target_len = (n - 1) * stride + 1
+    index = [slice(None)] * flat.ndim
+    index[axis] = slice(0, target_len)
+    return flat[tuple(index)]
+
+
+def _place_at_offset(g: "Tensor", axis: int, offset: int, final_size: int) -> "Tensor":
+    n = g.shape[axis]
+    before = offset
+    after = final_size - offset - n
+    parts = []
+    if before > 0:
+        shape_before = list(g.shape)
+        shape_before[axis] = before
+        parts.append(Tensor(np.zeros(shape_before)))
+    parts.append(g)
+    if after > 0:
+        shape_after = list(g.shape)
+        shape_after[axis] = after
+        parts.append(Tensor(np.zeros(shape_after)))
+    return concatenate(parts, axis=axis) if len(parts) > 1 else parts[0]
+
+
+def _unfold2d_backward_tensor(
+    out_grad: "Tensor", kernel_size: int, stride: int, H: int, W: int, h_out: int, w_out: int
+) -> "Tensor":
+    total = None
+    for i in range(kernel_size):
+        for j in range(kernel_size):
+            window_slice = out_grad[:, :, :, :, i, j]
+            dilated = _dilate_axis(window_slice, axis=2, stride=stride)
+            dilated = _dilate_axis(dilated, axis=3, stride=stride)
+            placed = _place_at_offset(dilated, axis=2, offset=i, final_size=H)
+            placed = _place_at_offset(placed, axis=3, offset=j, final_size=W)
+            total = placed if total is None else total + placed
+    return total
+
+
 class Tensor:
 
     __array_priority__ = 1000
@@ -447,21 +499,16 @@ class Tensor:
         def _backward():
             if self.requires_grad:
                 if isinstance(out.grad, Tensor):
-                    raise NotImplementedError(
-                        "second-order gradients are not yet supported through unfold2d: scattering "
-                        "a Tensor's values back into OVERLAPPING input positions (every window that "
-                        "shares a pixel with its neighbor) has no composed equivalent yet, unlike "
-                        "plain __getitem__, which now supports create_graph=True for any index "
-                        "pattern. This affects Conv2d, MaxPool2d, and AvgPool2d, which are all built "
-                        "on unfold2d. See LIMITATIONS.md."
-                    )
-                grad_full = np.zeros_like(self.data)
-                for i in range(kernel_size):
-                    for j in range(kernel_size):
-                        grad_full[:, :, i : i + stride * h_out : stride, j : j + stride * w_out : stride] += (
-                            out.grad[:, :, :, :, i, j]
-                        )
-                self._accumulate_grad(grad_full)
+                    grad_full = _unfold2d_backward_tensor(out.grad, kernel_size, stride, H, W, h_out, w_out)
+                    self._accumulate_grad(grad_full)
+                else:
+                    grad_full = np.zeros_like(self.data)
+                    for i in range(kernel_size):
+                        for j in range(kernel_size):
+                            grad_full[:, :, i : i + stride * h_out : stride, j : j + stride * w_out : stride] += (
+                                out.grad[:, :, :, :, i, j]
+                            )
+                    self._accumulate_grad(grad_full)
 
         out._backward = _backward
         return out
