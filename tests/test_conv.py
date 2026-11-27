@@ -49,11 +49,72 @@ def test_unfold2d_rejects_oversized_kernel():
         Tensor(np.random.randn(1, 1, 5, 5)).unfold2d(10)
 
 
-def test_unfold2d_create_graph_raises_clear_error():
-    x = Tensor(np.random.randn(1, 1, 5, 5), requires_grad=True)
-    out = (x.unfold2d(3) ** 2).sum()
-    with pytest.raises(NotImplementedError):
-        out.backward(create_graph=True)
+@pytest.mark.parametrize("kernel_size, stride", [(2, 1), (3, 1), (2, 2), (3, 2)])
+def test_unfold2d_second_derivative_matches_numpy_mode_backward(kernel_size, stride):
+    def numpy_mode_grad(xv):
+        xt = Tensor(xv, requires_grad=True)
+        (xt.unfold2d(kernel_size, stride=stride) ** 3).sum().backward()
+        return xt.grad.copy()
+
+    x = Tensor(np.random.default_rng(5).standard_normal((1, 1, 7, 7)), requires_grad=True)
+    first = (x.unfold2d(kernel_size, stride=stride) ** 3).sum()
+    first.backward(create_graph=True)
+    assert isinstance(x.grad, Tensor)
+    np.testing.assert_allclose(x.grad.data, numpy_mode_grad(x.data), atol=1e-8)
+
+
+def test_unfold2d_second_derivative_matches_independent_finite_difference_with_overlap():
+    kernel_size, stride = 3, 1
+
+    def grad_at(xv):
+        xt = Tensor(xv, requires_grad=True)
+        (xt.unfold2d(kernel_size, stride=stride) ** 3).sum().backward()
+        return xt.grad.copy()
+
+    x0 = np.random.default_rng(6).standard_normal((1, 1, 5, 5))
+    x = Tensor(x0, requires_grad=True)
+    first = (x.unfold2d(kernel_size, stride=stride) ** 3).sum()
+    first.backward(create_graph=True)
+    first_grad = x.grad
+    x.grad = None
+    first_grad.sum().backward()
+    analytic_second = x.grad.copy()
+
+    eps = 1e-4
+    for _ in range(5):
+        idx = tuple(np.random.default_rng(7).integers(0, s) for s in x0.shape)
+        xp, xm = x0.copy(), x0.copy()
+        xp[idx] += eps
+        xm[idx] -= eps
+        numeric = (grad_at(xp)[idx] - grad_at(xm)[idx]) / (2 * eps)
+        assert abs(numeric - analytic_second[idx]) < 1e-2
+
+
+def test_conv2d_second_derivative_is_finite_through_weight_and_input():
+    conv = Conv2d(2, 3, kernel_size=3, stride=1, padding=1, seed=0)
+    x = Tensor(np.random.default_rng(8).standard_normal((2, 2, 6, 6)), requires_grad=True)
+    loss = (conv(x) ** 2).sum()
+    loss.backward(create_graph=True)
+    assert isinstance(conv.weight.grad, Tensor)
+    assert isinstance(x.grad, Tensor)
+
+    weight_scalar = (conv.weight.grad ** 2).sum()
+    conv.weight.grad = None
+    weight_scalar.backward()
+    assert np.all(np.isfinite(conv.weight.grad))
+
+
+@pytest.mark.parametrize("pool_cls", [MaxPool2d, AvgPool2d])
+def test_pooling_second_derivative_is_finite_with_overlapping_windows(pool_cls):
+    pool = pool_cls(2, stride=1)
+    x = Tensor(np.random.default_rng(9).standard_normal((1, 2, 5, 5)), requires_grad=True)
+    out = (pool(x) ** 2).sum()
+    out.backward(create_graph=True)
+    assert isinstance(x.grad, Tensor)
+    scalar = (x.grad ** 2).sum()
+    x.grad = None
+    scalar.backward()
+    assert np.all(np.isfinite(x.grad))
 
 
 def test_conv2d_matches_reference_loop_implementation():
