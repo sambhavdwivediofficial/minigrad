@@ -241,12 +241,17 @@ def test_rnn_sequence_wrapper_supports_create_graph():
     assert np.all(np.isfinite(x.grad))
 
 
-def test_conv2d_raises_clear_error_under_create_graph():
+def test_conv2d_supports_create_graph():
     conv = Conv2d(1, 2, kernel_size=3, padding=1, seed=0)
     x = Tensor(np.random.randn(1, 1, 5, 5), requires_grad=True)
     out = (conv(x) ** 2).sum()
-    with pytest.raises(NotImplementedError):
-        out.backward(create_graph=True)
+    out.backward(create_graph=True)
+    assert isinstance(x.grad, Tensor)
+    assert isinstance(conv.weight.grad, Tensor)
+    scalar = (x.grad ** 2).sum()
+    x.grad = None
+    scalar.backward()
+    assert np.all(np.isfinite(x.grad))
 
 
 def test_hessian_and_hvp_reject_non_1d_input():
